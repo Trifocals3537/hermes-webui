@@ -29380,11 +29380,11 @@ def _handle_chat_start(handler, body, diag=None):
             }, status=409)
         except PermissionError:
             return bad(handler, "Read-only imported sessions cannot be continued from WebUI", 403)
-        from api.gateway_sessions import configured as gateway_session_configured
+        from api.gateway_sessions import configured as gateway_session_configured, model_change_requested
         if webui_gateway_chat_enabled(get_config()) and gateway_session_configured(vars(s)):
             if body.get("regenerate") or body.get("attachments"):
                 return bad(handler, "Gateway session continuation currently supports text messages. Use the original client for attachments or regeneration.", 400)
-            if body.get("model") and body["model"] != s.model:
+            if model_change_requested(s, body):
                 return bad(handler, "Change this conversation's model in its original client before continuing here.", 400)
         diag.stage("validate_profile") if diag else None
         requested_profile = str(body.get("profile") or "").strip()

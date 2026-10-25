@@ -57,14 +57,24 @@ def configured(session, config=None):
         config = _gateway_config_for_profile(session.get("profile"))
         if config is None:
             config = get_config()
-    return config.get("webui_gateway_session_transport") == "local"
+    return config.get("webui_gateway_session_transport") in {"local", "unix"}
+
+
+def model_change_requested(session, body):
+    # Messaging rows can have no stored model even after a real Gateway turn.
+    # The browser then includes its displayed profile default on every send.
+    # That implicit display value is not an override: native prompt.submit sends
+    # only session_id, input_id and text; the Gateway selects its own model.
+    stored = getattr(session, "model", None)
+    return bool(body.get("explicit_model_pick") or (
+        stored not in {None, "", "unknown"} and body.get("model") and body["model"] != stored))
 
 
 @asynccontextmanager
-async def connect_local(home):
+async def connect_local_socket(home):
     # Use the Agent's authenticated discovery/bootstrap client. Passing the home
     # explicitly matters: WebUI worker threads have no request-profile context.
-    from hermes_cli.gateway_client import GatewayClient, _session_ticket, gateway_ws_target
+    from hermes_cli.gateway_client import _session_ticket, gateway_ws_target
     from hermes_cli.gateway_runtime import attachable, discover_gateway_endpoint
     from websockets.asyncio.client import connect
 
@@ -80,6 +90,13 @@ async def connect_local(home):
                        max_size=8 * 1024 * 1024) as ws:
         if ws.subprotocol != "hermes-gateway-v1":
             raise SessionTransportError("The Gateway does not support canonical sessions.")
+        yield ws
+
+
+@asynccontextmanager
+async def connect_local(home):
+    from hermes_cli.gateway_client import GatewayClient
+    async with connect_local_socket(home) as ws:
         async with GatewayClient(ws) as client:
             yield client
 
@@ -116,7 +133,7 @@ def respond_clarify(session_id, clarify_id, answer):
 
 
 class SessionRelay:
-    def __init__(self, session_id, stream_id, home, request, emit, cancel, record):
+    def __init__(self, session_id, stream_id, home, request, emit, cancel, record, connector=None):
         self.session_id, self.stream_id, self.home = session_id, stream_id, home
         self.run_id = PREFIX + stream_id
         self.request, self.emit, self.cancel, self.record = request, emit, cancel, record
@@ -129,6 +146,7 @@ class SessionRelay:
         self.text = ""
         self.attempted = False
         self.snapshot = None
+        self.connector = connector or (lambda: connect_local(self.home))
 
     async def status(self):
         self.receipt = await self.client.rpc("prompt.receipt", session_id=self.session_id,
@@ -271,7 +289,7 @@ class SessionRelay:
         failures = 0
         while True:
             try:
-                async with connect_local(self.home) as client:
+                async with self.connector() as client:
                     self.client = client
                     snapshot = await client.rpc("session.resume", session_id=self.session_id, display_projection=True)
                     self.snapshot = snapshot
@@ -360,14 +378,35 @@ class SessionRelay:
 
 def run_session(session, stream_id, text, *, emit, cancel, record, saved=None):
     from api.profiles import get_hermes_home_for_profile
+    from api.gateway_chat import _gateway_config_for_profile
+    from api.config import get_config
     home = str(Path(get_hermes_home_for_profile(session.profile)).resolve())
     if saved and saved.get("profile_home") != home:
         raise SessionTransportError("Gateway profile changed; refusing to replay this turn.")
+    config = _gateway_config_for_profile(session.profile)
+    if config is None:
+        config = get_config()
+    mode = config.get("webui_gateway_session_transport")
+    binding = {"mode": mode}
+    connector = None
+    if mode == "unix":
+        from api.gateway_session_bridge import connect_bridge
+        socket_path = config.get("webui_gateway_session_socket")
+        if not isinstance(socket_path, str) or not Path(socket_path).is_absolute():
+            raise SessionTransportError("Configure an absolute private Gateway session socket path.")
+        profile = session.profile or "default"
+        binding.update(socket=socket_path, profile=profile)
+        connector = lambda: connect_bridge(socket_path, profile)
+    elif mode != "local":
+        raise SessionTransportError("Gateway session transport is not configured.")
+    if saved and saved.get("session_connection", {"mode": "local"}) != binding:
+        raise SessionTransportError("Gateway connection changed; refusing to replay this turn.")
     request = (saved or {}).get("session_request") or {
         "session_id": session.session_id, "input_id": "webui:" + stream_id, "text": text,
     }
     def persist(run_id, request):
-        record(run_id, request, transport="session", session_request=request, profile_home=home)
-    relay = SessionRelay(session.session_id, stream_id, home, request, emit, cancel, persist)
+        record(run_id, request, transport="session", session_request=request, profile_home=home,
+               session_connection=binding)
+    relay = SessionRelay(session.session_id, stream_id, home, request, emit, cancel, persist, connector)
     text, usage = asyncio.run(relay.run())
     return text, usage, relay.snapshot

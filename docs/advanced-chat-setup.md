@@ -318,10 +318,12 @@ WebUI must run as an authorized local native client with access to that profile'
 Agent home and private bootstrap endpoint (Unix socket or Windows named pipe).
 The installed Agent must provide canonical sessions, native bootstrap tickets,
 and durable `prompt.submit` / `prompt.receipt`; this integration was tested with
-Agent commit `a480a27e76dcad8da7665408e54c6ec270c10f14`. A REST API key or a shared
-source/state volume alone is insufficient. Separate containers and remote-only
-REST deployments need an accessible, supported native connection before enabling
-this setting. WebUI discovers an already running Gateway; it does not start one.
+Agent commit `a480a27e76dcad8da7665408e54c6ec270c10f14` locally and
+`v0.22.5-desktop` with the Linux container helper. A REST API key or a shared
+source/state volume alone is insufficient. Separate Linux containers can use the
+[private session socket helper](gateway-session-containers.md). Remote-only REST
+deployments remain read-only for these sessions. WebUI discovers an already
+running Gateway; it does not start one.
 
 For eligible Desktop, CLI/TUI and messaging sessions, text follow-ups then resume
 the **same session ID** through native authorization. The Gateway owns admission,

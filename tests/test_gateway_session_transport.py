@@ -26,6 +26,21 @@ def test_config_does_not_grant_unsupported_sources_write_access(shape):
     assert not sessions.configured(shape, {"webui_gateway_session_transport": "local"})
 
 
+@pytest.mark.parametrize("stored", [None, "", "unknown"])
+def test_messaging_without_model_accepts_implicit_browser_default(stored):
+    from types import SimpleNamespace
+    session = SimpleNamespace(model=stored)
+    assert not sessions.model_change_requested(session, {"model": "profile-default"})
+    assert sessions.model_change_requested(session, {"model": "picked", "explicit_model_pick": True})
+
+
+def test_known_native_model_cannot_be_overridden():
+    from types import SimpleNamespace
+    session = SimpleNamespace(model="gateway-model")
+    assert not sessions.model_change_requested(session, {"model": "gateway-model"})
+    assert sessions.model_change_requested(session, {"model": "different-model"})
+
+
 def test_default_profile_uses_its_config(monkeypatch):
     from api import config, gateway_chat
     monkeypatch.setattr(gateway_chat, "_gateway_config_for_profile", lambda _: None)
