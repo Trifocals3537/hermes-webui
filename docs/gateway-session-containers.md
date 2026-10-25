@@ -92,7 +92,11 @@ text/control limitations as the [local transport](advanced-chat-setup.md).
 ## Recovery and removal
 
 Disconnecting the helper does not cancel a Gateway turn. Reconnecting uses the
-same durable input ID. WebUI journals the transport mode, socket path and profile
+same durable input ID. While an admission's outcome is uncertain, WebUI retains
+its existing stream and recovery worker and retries with bounded backoff. Opening
+the conversation again attaches to that worker; it does not discard the pending
+request or admit a replacement. A WebUI restart restores the saved request.
+WebUI journals the transport mode, socket path and profile
 with that request and refuses recovery if the connection configuration changes.
 Keep the socket path bound to the same Gateway deployment; do not repoint it to
 another instance while turns are pending.

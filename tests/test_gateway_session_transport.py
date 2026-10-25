@@ -41,6 +41,14 @@ def test_known_native_model_cannot_be_overridden():
     assert sessions.model_change_requested(session, {"model": "different-model"})
 
 
+def test_unchanged_cross_provider_selection_is_not_a_model_change():
+    from types import SimpleNamespace
+    session = SimpleNamespace(model="gateway-model", model_provider="native-provider")
+    body = {"model": "gateway-model", "model_provider": "native-provider", "explicit_model_pick": True}
+    assert not sessions.model_change_requested(session, body)
+    assert sessions.model_change_requested(session, {**body, "model_provider": "another-provider"})
+
+
 def test_default_profile_uses_its_config(monkeypatch):
     from api import config, gateway_chat
     monkeypatch.setattr(gateway_chat, "_gateway_config_for_profile", lambda _: None)
@@ -124,18 +132,78 @@ def test_authority_refusal_is_terminal_without_submit_or_http_fallback(protocol,
     assert "session:stable" not in sessions._CONNECTIONS
 
 
-def test_disconnect_preserves_recoverable_request(protocol, monkeypatch):
+def test_disconnect_keeps_recovering_past_old_retry_limit(protocol, monkeypatch):
+    attempts = []
+    client = Client()
     @asynccontextmanager
     async def connect(home):
-        raise ConnectionError("do not leak ws://credential@host")
-        yield
+        attempts.append(home)
+        if len(attempts) <= 5:
+            raise ConnectionError("do not leak ws://credential@host")
+        yield client
     monkeypatch.setattr(sessions, "connect_local", connect)
+    async def no_delay(_):
+        pass
+    monkeypatch.setattr(sessions.asyncio, "sleep", no_delay)
     instance, _, records = relay()
-    with pytest.raises(sessions.SessionTransportDisconnected, match="do not resend") as error:
-        asyncio.run(instance.run())
-    assert "credential" not in str(error.value)
-    assert records == [("", instance.request)]
+    assert asyncio.run(instance.run()) == ("original session reply", {})
+    assert len(attempts) == 6
+    assert records[0] == ("", instance.request)
     assert "session:stable" not in sessions._CONNECTIONS
+
+
+@pytest.mark.parametrize("failure", ["discovery", "refusal"])
+def test_lost_ack_then_connection_failure_keeps_original_admission(protocol, monkeypatch, failure):
+    first, final = Client(lose_ack=True), Client()
+    peers = iter([first, None, final])
+    @asynccontextmanager
+    async def connect(home):
+        peer = next(peers)
+        if peer is None:
+            if failure == "discovery":
+                raise sessions.SessionTransportError("Gateway temporarily unavailable")
+            yield Client(refusal=protocol("permission_denied"))
+        else:
+            yield peer
+    monkeypatch.setattr(sessions, "connect_local", connect)
+    async def no_delay(_):
+        pass
+    monkeypatch.setattr(sessions.asyncio, "sleep", no_delay)
+    instance, _, _ = relay()
+    assert asyncio.run(instance.run()) == ("original session reply", {})
+    assert first.calls[1] == final.calls[1] == ("prompt.submit", instance.request)
+
+
+@pytest.mark.parametrize("is_error", [True, False])
+def test_canonical_tool_verdict_reaches_event_and_reconnect_snapshot(monkeypatch, is_error):
+    from api import gateway_chat
+    snapshots = []
+    monkeypatch.setattr(gateway_chat, "_note_live_gateway_event", lambda *args: snapshots.append(args))
+    instance, events, _ = relay()
+    instance.receipt = {"admission_id": "mine"}
+    instance.event({"session_id": instance.session_id, "admission_id": "mine", "type": "tool.complete",
+                    "payload": {"tool_call_id": "tool-1", "name": "terminal", "is_error": is_error}})
+    assert events[-1][1]["is_error"] is is_error
+    assert snapshots[-1][2]["is_error"] is is_error
+
+
+@pytest.mark.parametrize("batch", [True, False])
+def test_clarification_control_matches_canonical_parameter_shape(monkeypatch, batch):
+    from api import clarify
+    monkeypatch.setattr(clarify, "submit_pending", lambda *args: None)
+    instance, _, _ = relay()
+    client = Client()
+    client.status = "started"
+    instance.client, instance.receipt = client, {"admission_id": "one-admission"}
+    if batch:
+        instance.clarify({"questions": [{"qid": "q1", "question": "Continue?"}]}, request_id="request-1")
+        expected = ("clarify.lock", {"request_id": "request-1", "question_id": "q1", "answer": "yes"})
+    else:
+        instance.clarify({"prompt_id": "q1", "question": "Continue?", "execution_generation": 3})
+        expected = ("clarify.respond", {"session_id": instance.session_id, "prompt_id": "q1",
+                                       "execution_generation": 3, "answer": "yes"})
+    asyncio.run(instance.control("clarify", clarify_id=next(iter(instance.clarifications)), answer="yes"))
+    assert client.calls[-1] == expected
 
 
 def test_only_own_admission_is_relayed_and_replayed_deltas_are_deduplicated(monkeypatch):
@@ -176,6 +244,29 @@ def test_stale_approval_cannot_approve_new_generation():
     with pytest.raises(sessions.SessionTransportError, match="no longer pending"):
         asyncio.run(instance.control("approval", approval_id="old-prompt", choice="once"))
     assert all(method != "approval.respond" for method, _ in client.calls)
+
+
+def test_recovered_cancel_reconciles_saved_admission_before_interrupt(protocol, monkeypatch):
+    class Running(Client):
+        async def rpc(self, method, **params):
+            result = await super().rpc(method, **params)
+            if method == "session.interrupt":
+                self.status = "terminal"
+            if method == "prompt.receipt" and self.status == "terminal":
+                result["outcome"] = "interrupted"
+            return result
+    client = Running()
+    client.status = "started"
+    @asynccontextmanager
+    async def connect(home):
+        yield client
+    monkeypatch.setattr(sessions, "connect_local", connect)
+    instance, _, _ = relay()
+    instance.attempted = True  # restored durable request may already be admitted
+    instance.cancel.set()
+    assert asyncio.run(instance.run()) == (None, {})
+    assert any(method == "prompt.submit" and params == instance.request for method, params in client.calls)
+    assert ("session.interrupt", {"session_id": instance.session_id, "execution_generation": 3}) in client.calls
 
 
 def test_display_projection_keeps_native_identity_without_inventing_merge_id():

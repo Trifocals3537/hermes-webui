@@ -66,8 +66,12 @@ def model_change_requested(session, body):
     # That implicit display value is not an override: native prompt.submit sends
     # only session_id, input_id and text; the Gateway selects its own model.
     stored = getattr(session, "model", None)
-    return bool(body.get("explicit_model_pick") or (
-        stored not in {None, "", "unknown"} and body.get("model") and body["model"] != stored))
+    if stored in {None, "", "unknown"}:
+        return bool(body.get("explicit_model_pick"))
+    if body.get("model") and body["model"] != stored:
+        return True
+    provider = getattr(session, "model_provider", None)
+    return bool(provider and body.get("model_provider") and body["model_provider"] != provider)
 
 
 @asynccontextmanager
@@ -80,10 +84,10 @@ async def connect_local_socket(home):
 
     found = await asyncio.to_thread(discover_gateway_endpoint, home)
     if not attachable(found) or found.endpoint is None:
-        raise SessionTransportError("The profile's local Gateway is not available. Nothing was submitted.")
+        raise SessionTransportError("The profile's local Gateway is not available.")
     endpoint = found.endpoint
     if Path(endpoint.profile_id).resolve() != Path(home).resolve():
-        raise SessionTransportError("Gateway profile mismatch. Nothing was submitted.")
+        raise SessionTransportError("Gateway profile mismatch.")
     ticket = await asyncio.to_thread(_session_ticket, Path(home), endpoint)
     url, protocols = gateway_ws_target(endpoint, ticket)
     async with connect(url, subprotocols=protocols, proxy=None, open_timeout=10,
@@ -133,7 +137,7 @@ def respond_clarify(session_id, clarify_id, answer):
 
 
 class SessionRelay:
-    def __init__(self, session_id, stream_id, home, request, emit, cancel, record, connector=None):
+    def __init__(self, session_id, stream_id, home, request, emit, cancel, record, connector=None, *, recovering=False):
         self.session_id, self.stream_id, self.home = session_id, stream_id, home
         self.run_id = PREFIX + stream_id
         self.request, self.emit, self.cancel, self.record = request, emit, cancel, record
@@ -144,7 +148,9 @@ class SessionRelay:
         self.approvals = {}
         self.clarifications = {}
         self.text = ""
-        self.attempted = False
+        # A saved request may have been admitted before its acknowledgement was
+        # persisted. Cancellation or discovery failure cannot declare it unsent.
+        self.attempted = recovering
         self.snapshot = None
         self.connector = connector or (lambda: connect_local(self.home))
 
@@ -183,8 +189,8 @@ class SessionRelay:
             method, fields = target
             if "execution_generation" in fields and fields["execution_generation"] != generation:
                 raise SessionTransportError("This clarification is no longer pending.")
-            return await self.client.rpc(method, session_id=self.session_id,
-                                         **fields, answer=params["answer"])
+            scope = {"session_id": self.session_id} if method == "clarify.respond" else {}
+            return await self.client.rpc(method, **scope, **fields, answer=params["answer"])
         if action == "steer" and receipt["status"] == "started":
             return await self.client.rpc("session.steer", session_id=self.session_id,
                                          execution_generation=generation, text=params["text"])
@@ -265,7 +271,8 @@ class SessionRelay:
             name = "tool" if kind == "tool.start" else "tool_complete"
             data = {"name": payload.get("name") or payload.get("tool"),
                     "tid": payload.get("tool_call_id") or payload.get("id"),
-                    "args": payload.get("args") or {}, "is_error": bool(payload.get("error"))}
+                    "args": payload.get("args") or {},
+                    "is_error": bool(payload.get("is_error", payload.get("error", False)))}
             _note_live_gateway_event(self.stream_id, name, data)
             self.emit(name, data)
         elif kind == "approval.request":
@@ -288,6 +295,8 @@ class SessionRelay:
         self.record("", self.request)
         failures = 0
         while True:
+            attempted_before_connect = self.attempted
+            terminal_outcome = False
             try:
                 async with self.connector() as client:
                     self.client = client
@@ -322,6 +331,7 @@ class SessionRelay:
                     while True:
                         receipt = await self.status()
                         if receipt["status"] == "terminal":
+                            terminal_outcome = True
                             if receipt.get("outcome") in {"cancelled", "interrupted"}:
                                 self.emit("cancel", {"message": "Cancelled by user"})
                                 return None, {}
@@ -355,16 +365,17 @@ class SessionRelay:
                                 if (await self.status()).get("status") == "started":
                                     self.clarify(frame["params"], request_id=frame["id"])
             except GatewayRPCError as exc:
-                code = str(exc)
-                suffix = f": {code}" if re.fullmatch(r"[a-z_]{1,80}", code) else "."
-                raise SessionTransportError("Gateway refused the session operation" + suffix) from None
+                if terminal_outcome or (not attempted_before_connect and self.receipt is None):
+                    code = str(exc)
+                    suffix = f": {code}" if re.fullmatch(r"[a-z_]{1,80}", code) else "."
+                    raise SessionTransportError("Gateway refused the session operation" + suffix) from None
+                # A refusal while reconnecting does not settle an earlier
+                # uncertain submission. Keep its input ID and worker ownership.
             except SessionTransportError:
-                raise
+                if terminal_outcome or not self.attempted:
+                    raise
             except Exception:
-                failures += 1
-                if failures >= 4:
-                    raise SessionTransportDisconnected("Gateway connection lost; the turn may still be running. Reopen this conversation to recover it; do not resend.") from None
-                await asyncio.sleep(min(failures * 0.5, 2))
+                pass
             finally:
                 self.client = None
                 from api.clarify import resolve_clarify_by_id
@@ -374,6 +385,14 @@ class SessionRelay:
                 with _LOCK:
                     if _CONNECTIONS.get(self.run_id) is self:
                         del _CONNECTIONS[self.run_id]
+            # Retain the existing WebUI stream/worker while admission is unknown.
+            # Teardown would let stale-state repair erase the durable request and
+            # admit another turn. Reopening can attach to this same live worker;
+            # process restart uses the same persisted input ID through reattach.
+            failures += 1
+            from api.config import update_active_run
+            update_active_run(self.stream_id, phase="gateway-reconnecting")
+            await asyncio.sleep(min(failures * 0.5, 5))
 
 
 def run_session(session, stream_id, text, *, emit, cancel, record, saved=None):
@@ -407,6 +426,7 @@ def run_session(session, stream_id, text, *, emit, cancel, record, saved=None):
     def persist(run_id, request):
         record(run_id, request, transport="session", session_request=request, profile_home=home,
                session_connection=binding)
-    relay = SessionRelay(session.session_id, stream_id, home, request, emit, cancel, persist, connector)
+    relay = SessionRelay(session.session_id, stream_id, home, request, emit, cancel, persist, connector,
+                         recovering=bool(saved))
     text, usage = asyncio.run(relay.run())
     return text, usage, relay.snapshot
