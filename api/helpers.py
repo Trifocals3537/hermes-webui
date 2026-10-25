@@ -1808,11 +1808,12 @@ def public_session_projection(session_dict: dict) -> dict:
 
     result.pop("chat_read_only_reason", None)
     result.pop("chat_via_gateway_session", None)
-    from api.gateway_sessions import configured
+    from api.gateway_sessions import configured, config_for_session, external_session
     from api.gateway_chat import webui_gateway_chat_enabled
-    if webui_gateway_chat_enabled() and configured(result):
+    config = config_for_session(result) if external_session(result) else None
+    if config is not None and webui_gateway_chat_enabled(config) and configured(result, config):
         result["chat_via_gateway_session"] = True
-    reason = gateway_session_chat_read_only_reason(result)
+    reason = gateway_session_chat_read_only_reason(result, config_data=config)
     if reason:
         result["chat_read_only_reason"] = reason
     return result

@@ -75,6 +75,9 @@ socket; it does not interrupt Gateway-owned turns.
 Each `--profile` names one existing profile under the Gateway home; omission
 denies access. Profile names are resolved by the helper, never supplied as paths
 by WebUI. Add only profiles the WebUI operator is authorized to control.
+Use `--profile default` for the root Gateway home even if its WebUI display name
+has been renamed. WebUI normalizes recognized root aliases to `default` in the
+socket handshake and saved recovery binding; named profiles remain distinct.
 
 In each eligible WebUI profile's `config.yaml`, set:
 
@@ -86,6 +89,9 @@ webui_gateway_session_socket: /run/webui-session/session.sock
 
 Keep the normal profile-specific REST configuration for API-owned sessions.
 External sessions use the private socket; the REST API key is never promoted.
+Composer eligibility reads the session's own profile configuration, including
+config-only setups without a backend environment variable. Error and Stop
+responses preserve that eligibility so another turn does not require a reload.
 The helper supports the same canonical-session Agent version requirements and
 text/control limitations as the [local transport](advanced-chat-setup.md).
 

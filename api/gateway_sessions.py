@@ -48,15 +48,19 @@ def display_history(snapshot):
     return rows
 
 
+def config_for_session(session):
+    """Use the owning profile on workers without request-local profile context."""
+    from api.gateway_chat import _gateway_config_for_profile
+    from api.config import get_config
+    config = _gateway_config_for_profile(session.get("profile"))
+    return get_config() if config is None else config
+
+
 def configured(session, config=None):
     if not external_session(session):
         return False
     if config is None:
-        from api.gateway_chat import _gateway_config_for_profile
-        from api.config import get_config
-        config = _gateway_config_for_profile(session.get("profile"))
-        if config is None:
-            config = get_config()
+        config = config_for_session(session)
     return config.get("webui_gateway_session_transport") in {"local", "unix"}
 
 
@@ -133,7 +137,10 @@ def respond_clarify(session_id, clarify_id, answer):
     except ValueError:
         return False
     from api.clarify import resolve_clarify_by_id
-    return resolve_clarify_by_id(session_id, clarify_id, answer)
+    # Gateway owns the acknowledgement. Its settlement event can retire this
+    # presentation mirror before the RPC returns; that is still success.
+    resolve_clarify_by_id(session_id, clarify_id, answer)
+    return True
 
 
 class SessionRelay:
@@ -396,15 +403,11 @@ class SessionRelay:
 
 
 def run_session(session, stream_id, text, *, emit, cancel, record, saved=None):
-    from api.profiles import get_hermes_home_for_profile
-    from api.gateway_chat import _gateway_config_for_profile
-    from api.config import get_config
+    from api.profiles import get_hermes_home_for_profile, _is_root_profile
     home = str(Path(get_hermes_home_for_profile(session.profile)).resolve())
     if saved and saved.get("profile_home") != home:
         raise SessionTransportError("Gateway profile changed; refusing to replay this turn.")
-    config = _gateway_config_for_profile(session.profile)
-    if config is None:
-        config = get_config()
+    config = config_for_session({"profile": session.profile})
     mode = config.get("webui_gateway_session_transport")
     binding = {"mode": mode}
     connector = None
@@ -413,7 +416,7 @@ def run_session(session, stream_id, text, *, emit, cancel, record, saved=None):
         socket_path = config.get("webui_gateway_session_socket")
         if not isinstance(socket_path, str) or not Path(socket_path).is_absolute():
             raise SessionTransportError("Configure an absolute private Gateway session socket path.")
-        profile = session.profile or "default"
+        profile = "default" if not session.profile or _is_root_profile(session.profile) else session.profile
         binding.update(socket=socket_path, profile=profile)
         connector = lambda: connect_bridge(socket_path, profile)
     elif mode != "local":

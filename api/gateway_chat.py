@@ -354,12 +354,12 @@ class GatewayExternalSessionReadOnly(PermissionError):
     pass
 
 
-def gateway_session_chat_read_only_reason(session: dict) -> str:
+def gateway_session_chat_read_only_reason(session: dict, config_data=None) -> str:
     """Transport eligibility only; never an Agent authorization grant or saved flag.
 
     Importing a WebUI sidecar does not change the Agent's source/API binding.
     Keep in-process continuation and newly created WebUI/fork sessions unchanged.
-    The request profile's config is the same one used for chat/start routing.
+    Resolve the owning profile even on workers without request context.
     """
     if session.get("session_source") == "fork":
         return ""
@@ -369,12 +369,12 @@ def gateway_session_chat_read_only_reason(session: dict) -> str:
         not source and not session.get("is_cli_session")
     ):
         return ""
-    from api.config import get_config
-
-    if not webui_gateway_chat_enabled(get_config()):
+    from api.gateway_sessions import configured, config_for_session
+    if config_data is None:
+        config_data = config_for_session(session)
+    if not webui_gateway_chat_enabled(config_data):
         return ""
-    from api.gateway_sessions import configured
-    if configured(session):
+    if configured(session, config_data):
         return ""
     return (
         "This conversation belongs to another Hermes client. Continuing it requires "
@@ -2313,7 +2313,8 @@ def _settle_gateway_terminal_error(
             terminal_session_persisted = True
         except Exception:
             logger.debug("Failed to persist gateway terminal error settlement", exc_info=True)
-        error_payload["session"] = redact_session_data(
+        from api.helpers import public_session_projection
+        error_payload["session"] = public_session_projection(
             _session_payload_with_full_messages(session, tool_calls=[])
         )
         error_payload["session_id"] = session.session_id
