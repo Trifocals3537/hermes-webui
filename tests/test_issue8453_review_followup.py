@@ -3,6 +3,8 @@ from collections import OrderedDict
 from contextlib import asynccontextmanager
 from types import SimpleNamespace
 import threading
+from urllib.parse import urlparse
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -84,7 +86,7 @@ def test_unix_handshake_and_recovery_bind_canonical_profile(isolated_profiles, m
     assert opened[0] == opened[1]
 
 
-@pytest.mark.parametrize("settlement", ["before_ack", "after_ack", "refused"])
+@pytest.mark.parametrize("settlement", ["before_ack", "after_ack", "refused", "expired"])
 def test_clarification_http_result_follows_gateway_ack(monkeypatch, settlement):
     sid, cid = "review-clarify", "gw-session:stable::question"
     owner = SimpleNamespace(session_id=sid, run_id="session:stable", clarifications={cid: ("clarify.respond", {})})
@@ -99,17 +101,21 @@ def test_clarification_http_result_follows_gateway_ack(monkeypatch, settlement):
         if settlement == "before_ack":
             assert clarify.resolve_clarify_by_id(sid, cid, "yes")
             owner.clarifications.clear()
-        return {"status": "resolved"}
+        return {"status": "expired" if settlement == "expired" else "ok"}
 
     monkeypatch.setattr(sessions, "control", control)
     replies = []
     monkeypatch.setattr(routes, "j", lambda handler, payload, status=200: replies.append((status, payload)))
+    body = {"session_id": sid, "clarify_id": cid, "answer": "yes"}
+    monkeypatch.setattr(routes, "_check_csrf", lambda *a: True)
+    monkeypatch.setattr(routes, "read_body", lambda *a: body)
     try:
         pending = clarify.submit_pending(sid, {"clarify_id": cid, "question": "Continue?"})
-        routes._handle_clarify_respond(None, {"session_id": sid, "clarify_id": cid, "answer": "yes"})
-        assert replies[0][0] == (409 if settlement == "refused" else 200)
-        assert replies[0][1]["ok"] is (settlement != "refused")
-        assert pending.event.is_set() is (settlement != "refused")
+        routes.handle_post(MagicMock(), urlparse("/api/clarify/respond"))
+        accepted = settlement not in {"refused", "expired"}
+        assert replies[0][0] == (200 if accepted else 409)
+        assert replies[0][1]["ok"] is accepted
+        assert pending.event.is_set() is accepted
         assert len(calls) == 1
     finally:
         clarify.clear_pending(sid)

@@ -124,6 +124,42 @@ def compression_db(tmp_path, request):
     db.close()
 
 
+@pytest.mark.parametrize("reason", ["timeout", "interrupted", "resolved"])
+def test_real_gateway_batch_withdrawal_reaches_webui(reason):
+    producer = pytest.importorskip("gateway.session_server_requests")
+    sid = "producer-clarify"
+    relay = sessions.SessionRelay(sid, "producer", "home", {}, lambda *a: None,
+                                  threading.Event(), lambda *a: None)
+    published, request_ids = [], []
+    relay.clarify({"questions": [{"qid": "other", "question": "Unrelated?"}]}, request_id="other-batch")
+    unrelated = set(relay.clarifications)
+
+    def write(frame):
+        request_ids.append(frame["id"])
+        relay.clarify(frame["params"], request_id=frame["id"])
+        assert len(relay.clarifications) == 2
+        # A different session cannot withdraw this batch even with its exact ID.
+        relay.event({"session_id": "foreign", "type": "request.cancel", "payload": {"id": frame["id"]}})
+        assert len(relay.clarifications) == 2
+        if reason == "resolved":
+            assert producer.resolve({"id": frame["id"], "result": {"answers": {"one": "yes"}}})
+
+    def publish(session_id, payload, *, event_type):
+        published.append(payload)
+        relay.event({"session_id": session_id, "type": event_type, "payload": payload})
+
+    stream = SimpleNamespace(fanout=SimpleNamespace(transports=lambda: [object()], write=write), publish=publish)
+    try:
+        producer.ask_viewer_result(stream, sid, "clarify", {"questions": [{"qid": "one", "question": "Continue?"}]},
+                                   timeout=0, cancelled=lambda: reason == "interrupted", qids=["one"])
+        assert published == [{"id": request_ids[0], "method": "clarify", "reason": reason}]
+        assert set(relay.clarifications) == unrelated
+        assert clarify.get_pending(sid)["clarify_id"] in unrelated
+        assert not producer.open_requests(stream, sid)
+    finally:
+        clarify.clear_pending(sid)
+
+
 @pytest.mark.parametrize("source", ["telegram", "discord"])
 def test_compressed_messaging_uses_owner_for_rpc_and_display_for_mirrors(compression_db, monkeypatch, source):
     db, home = compression_db
