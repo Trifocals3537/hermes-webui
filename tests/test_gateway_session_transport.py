@@ -50,11 +50,11 @@ def test_unchanged_cross_provider_selection_is_not_a_model_change():
 
 
 def test_default_profile_uses_its_config(monkeypatch):
-    from api import config, gateway_chat
-    monkeypatch.setattr(gateway_chat, "_gateway_config_for_profile", lambda _: None)
-    monkeypatch.setattr(config, "get_config", lambda: {"webui_gateway_session_transport": "local"})
+    from api import config, profiles
+    monkeypatch.setattr(profiles, "get_hermes_home_for_profile", lambda name: name)
+    monkeypatch.setattr(config, "get_config_for_profile_home", lambda home:
+        {"webui_gateway_session_transport": "local"} if home == "default" else {})
     assert sessions.configured({"profile": "default", "source_tag": "desktop"})
-    monkeypatch.setattr(gateway_chat, "_gateway_config_for_profile", lambda _: {})
     assert not sessions.configured({"profile": "other", "source_tag": "desktop"})
 
 

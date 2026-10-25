@@ -92,6 +92,8 @@ External sessions use the private socket; the REST API key is never promoted.
 Composer eligibility reads the session's own profile configuration, including
 config-only setups without a backend environment variable. Error and Stop
 responses preserve that eligibility so another turn does not require a reload.
+Detached workers resolve the same explicit profile home, including root aliases,
+even when the WebUI process is running under a different named profile.
 The helper supports the same canonical-session Agent version requirements and
 text/control limitations as the [local transport](advanced-chat-setup.md).
 

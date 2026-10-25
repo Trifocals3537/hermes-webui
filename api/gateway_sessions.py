@@ -50,10 +50,9 @@ def display_history(snapshot):
 
 def config_for_session(session):
     """Use the owning profile on workers without request-local profile context."""
-    from api.gateway_chat import _gateway_config_for_profile
-    from api.config import get_config
-    config = _gateway_config_for_profile(session.get("profile"))
-    return get_config() if config is None else config
+    from api.config import get_config_for_profile_home
+    from api.profiles import get_hermes_home_for_profile
+    return get_config_for_profile_home(get_hermes_home_for_profile(session.get("profile")))
 
 
 def configured(session, config=None):
@@ -133,8 +132,10 @@ def respond_clarify(session_id, clarify_id, answer):
     if owner is None:
         return False
     try:
-        control(owner.run_id, "clarify", clarify_id=clarify_id, answer=answer)
+        result = control(owner.run_id, "clarify", clarify_id=clarify_id, answer=answer)
     except ValueError:
+        return False
+    if isinstance(result, dict) and result.get("status") == "expired":
         return False
     from api.clarify import resolve_clarify_by_id
     # Gateway owns the acknowledgement. Its settlement event can retire this
@@ -143,11 +144,52 @@ def respond_clarify(session_id, clarify_id, answer):
     return True
 
 
+def _verified_messaging_owner(home, display_id, owner_id, *, recovering=False):
+    """Only the owning database's compression lineage may alias a display ID.
+
+    A fresh turn must start from its live tip. A retained admission may keep its
+    display segment after another compression; its canonical owner never changes.
+    No sidecar hint grants this equivalence, and this read never opens a writable DB.
+    """
+    db = None
+    try:
+        from hermes_state import SessionDB
+        path = Path(home) / "state.db"
+        if not path.is_file():
+            return False
+        db = SessionDB(path, read_only=True)
+        lineage = db.get_compression_lineage(display_id)
+        if not lineage or lineage[0] != owner_id or display_id not in lineage:
+            return False
+        tip = db.get_compression_tip(owner_id)
+        if tip != lineage[-1] or (not recovering and tip != display_id):
+            return False
+        rows = [db.get_session(sid) for sid in lineage]
+        if any(not row or row.get("source") not in _MESSAGING_SOURCES for row in rows):
+            return False
+        route = rows[0].get("session_key")
+        if not route or any(row.get("session_key") != route for row in rows):
+            return False
+        if any(row.get("profile_name") != rows[0].get("profile_name") for row in rows):
+            return False
+        last = rows[-1]
+        if not recovering and (last.get("end_reason") not in (None, "", "idle_timeout")
+                or (last.get("ended_at") is not None and last.get("end_reason") != "idle_timeout")):
+            return False
+        return db.get_compression_lineage(display_id) == lineage
+    except Exception:
+        return False
+    finally:
+        if db is not None:
+            db.close()
+
+
 class SessionRelay:
     def __init__(self, session_id, stream_id, home, request, emit, cancel, record, connector=None, *, recovering=False):
         self.session_id, self.stream_id, self.home = session_id, stream_id, home
         self.run_id = PREFIX + stream_id
         self.request, self.emit, self.cancel, self.record = request, emit, cancel, record
+        self.canonical_session_id = request.get("session_id", session_id)
         self.client = None
         self.receipt = None
         self.loop = None
@@ -162,7 +204,7 @@ class SessionRelay:
         self.connector = connector or (lambda: connect_local(self.home))
 
     async def status(self):
-        self.receipt = await self.client.rpc("prompt.receipt", session_id=self.session_id,
+        self.receipt = await self.client.rpc("prompt.receipt", session_id=self.canonical_session_id,
                                             admission_id=self.receipt["admission_id"], include_result=True)
         return self.receipt
 
@@ -173,10 +215,10 @@ class SessionRelay:
         generation = receipt.get("execution_generation")
         if action == "stop":
             if receipt["status"] == "queued":
-                await self.client.rpc("prompt.cancel", session_id=self.session_id,
+                await self.client.rpc("prompt.cancel", session_id=self.canonical_session_id,
                                       admission_id=receipt["admission_id"])
             elif receipt["status"] == "started":
-                await self.client.rpc("session.interrupt", session_id=self.session_id,
+                await self.client.rpc("session.interrupt", session_id=self.canonical_session_id,
                                       execution_generation=generation)
             elif receipt["status"] != "terminal":
                 raise SessionTransportError("Gateway turn outcome is unknown.")
@@ -186,7 +228,7 @@ class SessionRelay:
             expected = self.approvals.get(prompt_id)
             if expected is None or expected != generation or receipt["status"] != "started":
                 raise SessionTransportError("This approval is no longer pending.")
-            return await self.client.rpc("approval.respond", session_id=self.session_id,
+            return await self.client.rpc("approval.respond", session_id=self.canonical_session_id,
                                          execution_generation=expected, prompt_id=prompt_id,
                                          choice=params["choice"])
         if action == "clarify":
@@ -196,10 +238,10 @@ class SessionRelay:
             method, fields = target
             if "execution_generation" in fields and fields["execution_generation"] != generation:
                 raise SessionTransportError("This clarification is no longer pending.")
-            scope = {"session_id": self.session_id} if method == "clarify.respond" else {}
+            scope = {"session_id": self.canonical_session_id} if method == "clarify.respond" else {}
             return await self.client.rpc(method, **scope, **fields, answer=params["answer"])
         if action == "steer" and receipt["status"] == "started":
-            return await self.client.rpc("session.steer", session_id=self.session_id,
+            return await self.client.rpc("session.steer", session_id=self.canonical_session_id,
                                          execution_generation=generation, text=params["text"])
         raise SessionTransportError("This Gateway control is unavailable for the current turn.")
 
@@ -252,7 +294,7 @@ class SessionRelay:
 
     def event(self, frame):
         from api.gateway_chat import _append_gateway_stream_text, _note_live_gateway_event
-        if frame.get("session_id") != self.session_id:
+        if frame.get("session_id") != self.canonical_session_id:
             return
         seq, epoch = frame.get("seq"), frame.get("replay_epoch")
         if isinstance(seq, int):
@@ -260,7 +302,7 @@ class SessionRelay:
                 return
             self.epoch, self.sequence = epoch, seq
         if frame.get("type") == "request.cancel":
-            self.withdraw_clarify((frame.get("payload") or {}).get("request_id"))
+            self.withdraw_clarify((frame.get("payload") or {}).get("id"))
             return
         if frame.get("admission_id") != (self.receipt or {}).get("admission_id"):
             return
@@ -298,8 +340,6 @@ class SessionRelay:
         from api.gateway_chat import _adopt_gateway_stream_text, _publish_gateway_run_id
         from hermes_cli.gateway_client import GatewayRPCError
         self.loop = asyncio.get_running_loop()
-        # The normal sidecar journals the stable submission BEFORE any network send.
-        self.record("", self.request)
         failures = 0
         while True:
             attempted_before_connect = self.attempted
@@ -307,12 +347,22 @@ class SessionRelay:
             try:
                 async with self.connector() as client:
                     self.client = client
-                    snapshot = await client.rpc("session.resume", session_id=self.session_id, display_projection=True)
+                    snapshot = await client.rpc("session.resume", session_id=self.canonical_session_id, display_projection=True)
                     self.snapshot = snapshot
-                    if snapshot["session_id"] != self.session_id:
+                    owner_id = snapshot["session_id"]
+                    if self.attempted and owner_id != self.canonical_session_id:
+                        raise SessionTransportError("Gateway session owner changed; refusing to replay this turn.")
+                    if owner_id != self.session_id and not await asyncio.to_thread(
+                        _verified_messaging_owner, self.home, self.session_id, owner_id, recovering=self.attempted,
+                    ):
                         raise SessionTransportError("This conversation has moved to a continuation. Open that conversation first.")
+                    self.canonical_session_id = owner_id
+                    self.request = {**self.request, "session_id": owner_id}
                     if self.cancel.is_set() and not self.attempted:
                         return None, {}
+                    # Resolve identity first, then journal the exact canonical request
+                    # before prompt.submit. Never replay under a different owner.
+                    self.record(self.run_id if self.receipt else "", self.request)
                     # Retrying the same input_id returns the durable original admission.
                     self.attempted = True
                     self.receipt = await client.rpc("prompt.submit", **self.request)
@@ -321,7 +371,7 @@ class SessionRelay:
                         _CONNECTIONS[self.run_id] = self
                     _publish_gateway_run_id(self.stream_id, self.run_id)
                     if self.epoch is not None:
-                        replay = await client.rpc("session.events.since", session_id=self.session_id,
+                        replay = await client.rpc("session.events.since", session_id=self.canonical_session_id,
                                                   replay_epoch=self.epoch, last_sequence=self.sequence)
                         for frame in replay.get("events", []):
                             await self.receive_event(frame)
@@ -348,7 +398,7 @@ class SessionRelay:
                             text = result.get("final_response")
                             if not isinstance(text, str):
                                 raise SessionTransportError("Gateway did not return a durable completion receipt.")
-                            self.snapshot = await client.rpc("session.resume", session_id=self.session_id, display_projection=True)
+                            self.snapshot = await client.rpc("session.resume", session_id=self.canonical_session_id, display_projection=True)
                             return _adopt_gateway_stream_text(self.stream_id, text), receipt.get("usage") or {}
                         if receipt["status"] == "unknown":
                             raise SessionTransportDisconnected("Gateway turn outcome is unknown. Do not resend the message.")
@@ -366,7 +416,7 @@ class SessionRelay:
                                 raise frame
                             if frame.get("method") == "event":
                                 await self.receive_event(frame.get("params") or {})
-                            elif frame.get("method") == "clarify" and (frame.get("params") or {}).get("session_id") == self.session_id:
+                            elif frame.get("method") == "clarify" and (frame.get("params") or {}).get("session_id") == self.canonical_session_id:
                                 # A queued admission must not answer another client's
                                 # active turn. Refresh before projecting a server request.
                                 if (await self.status()).get("status") == "started":

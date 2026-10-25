@@ -19032,20 +19032,28 @@ def handle_post(handler, parsed) -> bool:
             new_ws = str(resolve_trusted_workspace(body.get("workspace", s.workspace), profile=getattr(s, "profile", None)))
         except ValueError as e:
             return bad(handler, str(e))
+        from api.gateway_sessions import config_for_session, configured as native_configured
+        native_cfg = config_for_session(vars(s))
+        native = webui_gateway_chat_enabled(native_cfg) and native_configured(vars(s), native_cfg)
         with _get_session_agent_lock(body["session_id"]):
-            s.workspace = new_ws
-            if "model" in body or "model_provider" in body:
-                changed = _invalidate_session_route_state_if_changed(
-                    s,
-                    model=body.get("model", s.model),
-                    provider=body.get("model_provider") if "model_provider" in body else None,
-                    provider_specified="model_provider" in body,
-                )
-                if changed:
-                    from api.config import _evict_session_agent
+            refused = native and any(key in body and body[key] != getattr(s, key, None)
+                                     for key in ("model", "model_provider"))
+            if not refused:
+                s.workspace = new_ws
+                if "model" in body or "model_provider" in body:
+                    changed = _invalidate_session_route_state_if_changed(
+                        s,
+                        model=body.get("model", s.model),
+                        provider=body.get("model_provider") if "model_provider" in body else None,
+                        provider_specified="model_provider" in body,
+                    )
+                    if changed:
+                        from api.config import _evict_session_agent
 
-                    _evict_session_agent(body["session_id"])
-            s.save()
+                        _evict_session_agent(body["session_id"])
+                s.save()
+        if refused:
+            return bad(handler, "Change this conversation's model in its original client before continuing here.", 400)
         if str(old_ws or "") != str(new_ws or ""):
             try:
                 from api.terminal import close_terminal

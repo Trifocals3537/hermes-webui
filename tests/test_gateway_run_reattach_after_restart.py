@@ -91,7 +91,7 @@ def test_native_lost_ack_retains_worker_and_pending_on_reopen(isolated_sessions,
     protocol.GatewayRPCError = type("GatewayRPCError", (Exception,), {})
     monkeypatch.setitem(sys.modules, "hermes_cli.gateway_client", protocol)
     monkeypatch.setattr(profiles, "get_hermes_home_for_profile", lambda _: tmp_path)
-    monkeypatch.setattr(gateway_chat, "_gateway_config_for_profile", lambda _: {"webui_gateway_session_transport": "local"})
+    monkeypatch.setattr(gateway_sessions, "config_for_session", lambda _: {"webui_gateway_session_transport": "local"})
     s = new_session()
     s.profile, s.source_tag, s.model = profile, "desktop", "native-model"
     stream_id = "native-reconnect-" + profile

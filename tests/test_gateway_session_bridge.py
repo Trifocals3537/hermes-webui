@@ -30,9 +30,9 @@ def test_unix_is_explicit_opt_in():
 
 
 def test_recovery_refuses_different_bridge_before_connect(monkeypatch, tmp_path):
-    from api import gateway_chat, profiles
+    from api import profiles
     monkeypatch.setattr(profiles, "get_hermes_home_for_profile", lambda _: tmp_path)
-    monkeypatch.setattr(gateway_chat, "_gateway_config_for_profile", lambda _: {
+    monkeypatch.setattr(sessions, "config_for_session", lambda _: {
         "webui_gateway_session_transport": "unix", "webui_gateway_session_socket": str(tmp_path / "new.sock")})
     with pytest.raises(sessions.SessionTransportError, match="connection changed"):
         sessions.run_session(SimpleNamespace(profile="work"), "s", "never send", emit=None, cancel=None,

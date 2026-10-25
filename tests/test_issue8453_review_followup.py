@@ -17,8 +17,8 @@ def isolated_profiles(monkeypatch, tmp_path):
     monkeypatch.setattr(profiles, "_is_root_profile", lambda name: name in {"default", "renamed-root"})
     monkeypatch.setattr(profiles, "get_hermes_home_for_profile",
                         lambda name: tmp_path if name in {None, "default", "renamed-root"} else tmp_path / "profiles" / name)
-    monkeypatch.setattr(profiles, "get_active_hermes_home", lambda: tmp_path / "ambient")
-    monkeypatch.setattr(config, "_get_config_path", lambda: tmp_path / "ambient" / "config.yaml")
+    monkeypatch.setattr(profiles, "get_active_hermes_home", lambda: tmp_path)
+    monkeypatch.setattr(config, "_get_config_path", lambda: tmp_path / "config.yaml")
     root = {"webui_chat_backend": "gateway", "webui_gateway_session_transport": "unix"}
     monkeypatch.setattr(config, "get_config", lambda: root)
     for name in ("work", "family", "lab"):
@@ -55,7 +55,7 @@ def test_foreign_profile_does_not_inherit_root_eligibility(isolated_profiles, ba
 def test_unix_handshake_and_recovery_bind_canonical_profile(isolated_profiles, monkeypatch, profile, wire_profile):
     home, _ = isolated_profiles
     socket = str(home / "bridge.sock")
-    monkeypatch.setattr(gateway_chat, "_gateway_config_for_profile", lambda _: {
+    monkeypatch.setattr(sessions, "config_for_session", lambda _: {
         "webui_gateway_session_transport": "unix", "webui_gateway_session_socket": socket})
     opened, records = [], []
 

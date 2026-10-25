@@ -326,7 +326,7 @@ deployments remain read-only for these sessions. WebUI discovers an already
 running Gateway; it does not start one.
 
 For eligible Desktop, CLI/TUI and messaging sessions, text follow-ups then resume
-the **same session ID** through native authorization. The Gateway owns admission,
+the **same conversation** through native authorization. The Gateway owns admission,
 model/tool configuration, execution and history. WebUI translates its events and
 controls into the existing browser stream and approval/clarification cards. Stop
 targets only the WebUI admission or its execution generation. The existing WebUI
@@ -342,12 +342,25 @@ Authorization refusals never fall back to REST or an in-process agent, change a
 source label, or create a fork. A moved/compressed session must be opened at its
 continuation before submitting.
 
+For a compressed messaging conversation, the displayed transcript ID can differ
+from the Gateway's execution owner. WebUI accepts that mapping only when the
+owning profile's read-only `state.db` confirms the messaging compression lineage
+and the displayed segment is its current tip. It saves the canonical owner with
+the stable input ID and uses it for submissions, controls, events and recovery;
+browser state and clarification cards retain the displayed ID. An uncertain
+admission never moves to another owner, even if compression advances again.
+Missing, unrelated, cross-profile or explicitly closed lineage is refused.
+
 This opt-in currently supports text continuation, ordinary tool approvals,
 clarification questions, Stop and Steer. Attachments and regeneration are refused;
 model/tool/workspace settings and Desktop-specific bridges remain owned by the
 original Gateway session. The in-process backend and API-owned conversations keep
 their existing paths. Remove the setting to restore the external-session
 read-only composer; let any pending Gateway turn settle first.
+Native-session model/provider changes are also refused at the model-picker save
+endpoint, before altering the WebUI sidecar. An unchanged selection is allowed.
+An expired Gateway clarification acknowledgement is not reported as accepted;
+withdrawal events retire only the corresponding clarification cards.
 
 On the runs API path the turn is executed by the Gateway, so restarting WebUI does not stop it. WebUI stores the Gateway `run_id` on the pending turn (and submits it with an `Idempotency-Key` so the Gateway keeps a durable run record). On startup, WebUI reattaches to every such run by polling `GET /v1/runs/{run_id}` until it settles, then writes the real final answer into the session instead of a "Response interrupted" marker. Stop still cancels a reattached run, and a pending approval is shown again. Token-by-token output from before the restart is not replayed; the reattached turn shows only the final answer. If the Gateway no longer knows the run (for example, it restarted too and the run was interrupted), the turn ends with an error message instead. The legacy chat-completions transport cannot reattach: its turn ends when the WebUI process that holds the HTTP stream exits.
 
