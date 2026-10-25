@@ -54,10 +54,18 @@ def test_bad_handshake_never_bootstraps(monkeypatch, tmp_path, handshake):
 
 
 @pytest.mark.skipif(not hasattr(socket, "SO_PEERCRED"), reason="Linux peer credential integration")
-def test_private_unix_roundtrip_and_cleanup(tmp_path, monkeypatch):
+def test_private_unix_roundtrip_and_cleanup(tmp_path, monkeypatch, allow_outbound_network):
     from websockets.asyncio.client import unix_connect
     tmp_path.chmod(0o700)
     path = tmp_path / "session.sock"
+    # The suite's IP-only guard rejects Unix paths. Permit only this disposable
+    # socket for the roundtrip; keep every TCP and other Unix connection blocked.
+    real_connect = socket.socket.connect
+    def connect_fixture(peer, address):
+        if peer.family != socket.AF_UNIX or address != str(path):
+            raise OSError("Only the test's private Unix socket may be connected")
+        return real_connect(peer, address)
+    monkeypatch.setattr(socket.socket, "connect", connect_fixture)
     selected = []
     @asynccontextmanager
     async def upstream(home):
