@@ -1,0 +1,373 @@
+"""Opt-in, profile-local client of the Agent's existing canonical session protocol.
+
+The Gateway owns admission, execution and history. These objects own only sockets;
+the normal WebUI gateway_run sidecar and stream registries own recovery and UI state.
+No daemon is launched, source label changed, or API credential promoted to operator.
+"""
+from __future__ import annotations
+
+import asyncio
+from contextlib import asynccontextmanager
+from pathlib import Path
+import re
+import threading
+
+
+_LOCAL_SOURCES = frozenset({"cli", "tui", "desktop", "gui", "local", "acp"})
+_MESSAGING_SOURCES = frozenset({"telegram", "discord", "slack", "whatsapp", "signal",
+                               "matrix", "mattermost", "teams", "line", "feishu"})
+_CONNECTIONS = {}
+_LOCK = threading.Lock()
+PREFIX = "session:"
+
+
+class SessionTransportError(ValueError):
+    """Bounded public failure; never a raw socket URL, credential or remote traceback."""
+
+
+class SessionTransportDisconnected(SessionTransportError):
+    """Preserve the existing durable request so reopening recovers, never resends."""
+
+
+def external_session(session):
+    source = str(session.get("raw_source") or session.get("source_tag")
+                 or session.get("session_source") or "").strip().lower()
+    return session.get("session_source") != "fork" and source in _LOCAL_SOURCES | _MESSAGING_SOURCES
+
+
+def display_history(snapshot):
+    """Canonical display projections use text; WebUI transcript rows use content."""
+    rows = []
+    for row in snapshot.get("display_messages", snapshot.get("messages", [])):
+        if not isinstance(row, dict) or row.get("role") not in {"user", "assistant"}:
+            continue
+        item = {**row, "content": row.get("text", row.get("content", ""))}
+        # Retain the Gateway's row_id and timestamp. Do not invent a WebUI id:
+        # the existing state.db reader merges these rows by their native identity.
+        rows.append(item)
+    return rows
+
+
+def configured(session, config=None):
+    if not external_session(session):
+        return False
+    if config is None:
+        from api.gateway_chat import _gateway_config_for_profile
+        from api.config import get_config
+        config = _gateway_config_for_profile(session.get("profile"))
+        if config is None:
+            config = get_config()
+    return config.get("webui_gateway_session_transport") == "local"
+
+
+@asynccontextmanager
+async def connect_local(home):
+    # Use the Agent's authenticated discovery/bootstrap client. Passing the home
+    # explicitly matters: WebUI worker threads have no request-profile context.
+    from hermes_cli.gateway_client import GatewayClient, _session_ticket, gateway_ws_target
+    from hermes_cli.gateway_runtime import attachable, discover_gateway_endpoint
+    from websockets.asyncio.client import connect
+
+    found = await asyncio.to_thread(discover_gateway_endpoint, home)
+    if not attachable(found) or found.endpoint is None:
+        raise SessionTransportError("The profile's local Gateway is not available. Nothing was submitted.")
+    endpoint = found.endpoint
+    if Path(endpoint.profile_id).resolve() != Path(home).resolve():
+        raise SessionTransportError("Gateway profile mismatch. Nothing was submitted.")
+    ticket = await asyncio.to_thread(_session_ticket, Path(home), endpoint)
+    url, protocols = gateway_ws_target(endpoint, ticket)
+    async with connect(url, subprotocols=protocols, proxy=None, open_timeout=10,
+                       max_size=8 * 1024 * 1024) as ws:
+        if ws.subprotocol != "hermes-gateway-v1":
+            raise SessionTransportError("The Gateway does not support canonical sessions.")
+        async with GatewayClient(ws) as client:
+            yield client
+
+
+def control(run_id, action, **params):
+    """Dispatch only to the socket that owns this exact WebUI stream."""
+    with _LOCK:
+        relay = _CONNECTIONS.get(run_id)
+    if relay is None:
+        raise SessionTransportError("The Gateway session connection is unavailable; retry after reconnecting.")
+    future = asyncio.run_coroutine_threadsafe(relay.control(action, **params), relay.loop)
+    try:
+        return future.result(timeout=12)
+    except Exception:
+        future.cancel()
+        raise SessionTransportError("Gateway control was not acknowledged. Refresh the conversation before retrying.") from None
+
+
+def respond_clarify(session_id, clarify_id, answer):
+    """None for local prompts; a remote prompt can never fall back to local settlement."""
+    if not str(clarify_id).startswith("gw-session:"):
+        return None
+    with _LOCK:
+        owner = next((r for r in _CONNECTIONS.values()
+                      if r.session_id == session_id and clarify_id in r.clarifications), None)
+    if owner is None:
+        return False
+    try:
+        control(owner.run_id, "clarify", clarify_id=clarify_id, answer=answer)
+    except ValueError:
+        return False
+    from api.clarify import resolve_clarify_by_id
+    return resolve_clarify_by_id(session_id, clarify_id, answer)
+
+
+class SessionRelay:
+    def __init__(self, session_id, stream_id, home, request, emit, cancel, record):
+        self.session_id, self.stream_id, self.home = session_id, stream_id, home
+        self.run_id = PREFIX + stream_id
+        self.request, self.emit, self.cancel, self.record = request, emit, cancel, record
+        self.client = None
+        self.receipt = None
+        self.loop = None
+        self.epoch, self.sequence = None, -1
+        self.approvals = {}
+        self.clarifications = {}
+        self.text = ""
+        self.attempted = False
+        self.snapshot = None
+
+    async def status(self):
+        self.receipt = await self.client.rpc("prompt.receipt", session_id=self.session_id,
+                                            admission_id=self.receipt["admission_id"], include_result=True)
+        return self.receipt
+
+    async def control(self, action, **params):
+        if self.client is None or self.receipt is None:
+            raise SessionTransportError("Gateway session is reconnecting.")
+        receipt = await self.status()
+        generation = receipt.get("execution_generation")
+        if action == "stop":
+            if receipt["status"] == "queued":
+                await self.client.rpc("prompt.cancel", session_id=self.session_id,
+                                      admission_id=receipt["admission_id"])
+            elif receipt["status"] == "started":
+                await self.client.rpc("session.interrupt", session_id=self.session_id,
+                                      execution_generation=generation)
+            elif receipt["status"] != "terminal":
+                raise SessionTransportError("Gateway turn outcome is unknown.")
+            return True
+        if action == "approval":
+            prompt_id = params["approval_id"]
+            expected = self.approvals.get(prompt_id)
+            if expected is None or expected != generation or receipt["status"] != "started":
+                raise SessionTransportError("This approval is no longer pending.")
+            return await self.client.rpc("approval.respond", session_id=self.session_id,
+                                         execution_generation=expected, prompt_id=prompt_id,
+                                         choice=params["choice"])
+        if action == "clarify":
+            target = self.clarifications.get(params["clarify_id"])
+            if target is None or receipt["status"] != "started":
+                raise SessionTransportError("This clarification is no longer pending.")
+            method, fields = target
+            if "execution_generation" in fields and fields["execution_generation"] != generation:
+                raise SessionTransportError("This clarification is no longer pending.")
+            return await self.client.rpc(method, session_id=self.session_id,
+                                         **fields, answer=params["answer"])
+        if action == "steer" and receipt["status"] == "started":
+            return await self.client.rpc("session.steer", session_id=self.session_id,
+                                         execution_generation=generation, text=params["text"])
+        raise SessionTransportError("This Gateway control is unavailable for the current turn.")
+
+    def clarify(self, payload, *, request_id=None):
+        from api.clarify import submit_pending
+        questions = payload.get("questions", []) if request_id else [payload]
+        for question in questions:
+            qid = question.get("qid") if request_id else payload.get("prompt_id")
+            if not qid or qid in (payload.get("answers") or {}):
+                continue
+            local_id = f"gw-session:{self.stream_id}:{request_id or ''}:{qid}"
+            if local_id in self.clarifications:
+                continue
+            target = (("clarify.lock", {"request_id": request_id, "question_id": qid}) if request_id else
+                      ("clarify.respond", {"prompt_id": qid, "execution_generation": payload["execution_generation"]}))
+            self.clarifications[local_id] = target
+            submit_pending(self.session_id, {"clarify_id": local_id, "question": question.get("question", ""),
+                "choices_offered": question.get("choices") or [], "multi_select": bool(question.get("multi_select"))})
+
+    def withdraw_clarify(self, request_id):
+        from api.clarify import resolve_clarify_by_id
+        if not request_id:
+            return
+        for local_id, (_, fields) in list(self.clarifications.items()):
+            if request_id in {fields.get("request_id"), fields.get("prompt_id")}:
+                resolve_clarify_by_id(self.session_id, local_id, "")
+                del self.clarifications[local_id]
+
+    def approval(self, payload, generation):
+        from api.gateway_chat import _gateway_runs_approval_event, _settle_gateway_run_approval
+        prompt_id = payload.get("prompt_id")
+        if not prompt_id or self.approvals.get(prompt_id) == generation:
+            return
+        self.approvals[prompt_id] = generation
+        data = _gateway_runs_approval_event({**payload, "approval_id": prompt_id})
+        if data is None:
+            data = {"approval_id": prompt_id, "description": "Gateway tool approval", "choices": ["once", "deny"]}
+        data.update(run_id=self.run_id, _gateway_agent_identity_v1=True)
+        # Reuse the existing session-YOLO handoff and exact-owner mirror. This
+        # runs off the socket loop because approval settlement can RPC back to it.
+        settled, head, count = _settle_gateway_run_approval(self.session_id, data, "", "")
+        if not settled:
+            self.emit("approval", {**(head or data), "pending_count": count})
+
+    async def receive_event(self, frame):
+        if frame.get("type") == "approval.request":
+            await asyncio.to_thread(self.event, frame)
+        else:
+            self.event(frame)
+
+    def event(self, frame):
+        from api.gateway_chat import _append_gateway_stream_text, _note_live_gateway_event
+        if frame.get("session_id") != self.session_id:
+            return
+        seq, epoch = frame.get("seq"), frame.get("replay_epoch")
+        if isinstance(seq, int):
+            if epoch == self.epoch and seq <= self.sequence:
+                return
+            self.epoch, self.sequence = epoch, seq
+        if frame.get("type") == "request.cancel":
+            self.withdraw_clarify((frame.get("payload") or {}).get("request_id"))
+            return
+        if frame.get("admission_id") != (self.receipt or {}).get("admission_id"):
+            return
+        kind, payload = frame.get("type"), frame.get("payload") or {}
+        if kind == "message.delta":
+            text = payload.get("text") or payload.get("delta") or ""
+            if isinstance(text, str) and text:
+                self.text = _append_gateway_stream_text(self.stream_id, self.text, text)
+                self.emit("token", {"text": text})
+        elif kind in {"reasoning.delta", "thinking.delta"}:
+            data = {"text": payload.get("text") or payload.get("delta") or ""}
+            _note_live_gateway_event(self.stream_id, "reasoning", data)
+            self.emit("reasoning", data)
+        elif kind in {"tool.start", "tool.complete"}:
+            name = "tool" if kind == "tool.start" else "tool_complete"
+            data = {"name": payload.get("name") or payload.get("tool"),
+                    "tid": payload.get("tool_call_id") or payload.get("id"),
+                    "args": payload.get("args") or {}, "is_error": bool(payload.get("error"))}
+            _note_live_gateway_event(self.stream_id, name, data)
+            self.emit(name, data)
+        elif kind == "approval.request":
+            self.approval(payload, frame.get("execution_generation"))
+        elif kind == "clarify.request":
+            self.clarify({**payload, "execution_generation": frame.get("execution_generation")})
+        elif kind == "clarify.settled":
+            self.withdraw_clarify(payload.get("prompt_id"))
+        elif kind == "approval.settled":
+            from api.route_approvals import retire_gateway_pending_mirror
+            prompt_id = payload.get("prompt_id")
+            self.approvals.pop(prompt_id, None)
+            retire_gateway_pending_mirror(self.session_id, run_id=self.run_id, approval_id=prompt_id)
+
+    async def run(self):
+        from api.gateway_chat import _adopt_gateway_stream_text, _publish_gateway_run_id
+        from hermes_cli.gateway_client import GatewayRPCError
+        self.loop = asyncio.get_running_loop()
+        # The normal sidecar journals the stable submission BEFORE any network send.
+        self.record("", self.request)
+        failures = 0
+        while True:
+            try:
+                async with connect_local(self.home) as client:
+                    self.client = client
+                    snapshot = await client.rpc("session.resume", session_id=self.session_id, display_projection=True)
+                    self.snapshot = snapshot
+                    if snapshot["session_id"] != self.session_id:
+                        raise SessionTransportError("This conversation has moved to a continuation. Open that conversation first.")
+                    if self.cancel.is_set() and not self.attempted:
+                        return None, {}
+                    # Retrying the same input_id returns the durable original admission.
+                    self.attempted = True
+                    self.receipt = await client.rpc("prompt.submit", **self.request)
+                    self.record(self.run_id, self.request)
+                    with _LOCK:
+                        _CONNECTIONS[self.run_id] = self
+                    _publish_gateway_run_id(self.stream_id, self.run_id)
+                    if self.epoch is not None:
+                        replay = await client.rpc("session.events.since", session_id=self.session_id,
+                                                  replay_epoch=self.epoch, last_sequence=self.sequence)
+                        for frame in replay.get("events", []):
+                            await self.receive_event(frame)
+                    for prompt in snapshot.get("prompts", []):
+                        if self.receipt.get("status") != "started" or prompt.get("execution_generation") != self.receipt.get("execution_generation"):
+                            continue
+                        if prompt.get("kind") == "clarify":
+                            self.clarify(prompt)
+                        else:
+                            await asyncio.to_thread(self.approval, prompt, prompt.get("execution_generation"))
+                    for request in snapshot.get("open_requests", []):
+                        if self.receipt.get("status") == "started" and request.get("method") == "clarify":
+                            self.clarify(request.get("params") or {}, request_id=request["id"])
+                    while True:
+                        receipt = await self.status()
+                        if receipt["status"] == "terminal":
+                            if receipt.get("outcome") in {"cancelled", "interrupted"}:
+                                self.emit("cancel", {"message": "Cancelled by user"})
+                                return None, {}
+                            result = receipt.get("result") or {}
+                            if receipt.get("outcome") != "completed" or result.get("failed") or result.get("error"):
+                                raise SessionTransportError("Gateway turn failed. Open the conversation in its original client for details.")
+                            text = result.get("final_response")
+                            if not isinstance(text, str):
+                                raise SessionTransportError("Gateway did not return a durable completion receipt.")
+                            self.snapshot = await client.rpc("session.resume", session_id=self.session_id, display_projection=True)
+                            return _adopt_gateway_stream_text(self.stream_id, text), receipt.get("usage") or {}
+                        if receipt["status"] == "unknown":
+                            raise SessionTransportDisconnected("Gateway turn outcome is unknown. Do not resend the message.")
+                        if self.cancel.is_set():
+                            await self.control("stop")
+                        # A short receipt poll recovers dropped terminal frames. Between
+                        # polls, consume the actual streaming events without blocking RPCs.
+                        deadline = self.loop.time() + 0.5
+                        while self.loop.time() < deadline:
+                            try:
+                                frame = await asyncio.wait_for(client.events.get(), deadline - self.loop.time())
+                            except asyncio.TimeoutError:
+                                break
+                            if isinstance(frame, Exception):
+                                raise frame
+                            if frame.get("method") == "event":
+                                await self.receive_event(frame.get("params") or {})
+                            elif frame.get("method") == "clarify" and (frame.get("params") or {}).get("session_id") == self.session_id:
+                                # A queued admission must not answer another client's
+                                # active turn. Refresh before projecting a server request.
+                                if (await self.status()).get("status") == "started":
+                                    self.clarify(frame["params"], request_id=frame["id"])
+            except GatewayRPCError as exc:
+                code = str(exc)
+                suffix = f": {code}" if re.fullmatch(r"[a-z_]{1,80}", code) else "."
+                raise SessionTransportError("Gateway refused the session operation" + suffix) from None
+            except SessionTransportError:
+                raise
+            except Exception:
+                failures += 1
+                if failures >= 4:
+                    raise SessionTransportDisconnected("Gateway connection lost; the turn may still be running. Reopen this conversation to recover it; do not resend.") from None
+                await asyncio.sleep(min(failures * 0.5, 2))
+            finally:
+                self.client = None
+                from api.clarify import resolve_clarify_by_id
+                for local_id in self.clarifications:
+                    resolve_clarify_by_id(self.session_id, local_id, "")
+                self.clarifications.clear()
+                with _LOCK:
+                    if _CONNECTIONS.get(self.run_id) is self:
+                        del _CONNECTIONS[self.run_id]
+
+
+def run_session(session, stream_id, text, *, emit, cancel, record, saved=None):
+    from api.profiles import get_hermes_home_for_profile
+    home = str(Path(get_hermes_home_for_profile(session.profile)).resolve())
+    if saved and saved.get("profile_home") != home:
+        raise SessionTransportError("Gateway profile changed; refusing to replay this turn.")
+    request = (saved or {}).get("session_request") or {
+        "session_id": session.session_id, "input_id": "webui:" + stream_id, "text": text,
+    }
+    def persist(run_id, request):
+        record(run_id, request, transport="session", session_request=request, profile_home=home)
+    relay = SessionRelay(session.session_id, stream_id, home, request, emit, cancel, persist)
+    text, usage = asyncio.run(relay.run())
+    return text, usage, relay.snapshot

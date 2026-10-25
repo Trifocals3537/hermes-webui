@@ -298,6 +298,55 @@ HERMES_WEBUI_GATEWAY_USE_RUNS_API=true \
 
 Use this when the connected gateway advertises approval support and you want tool approval cards to appear in WebUI. Without `HERMES_WEBUI_GATEWAY_USE_RUNS_API=true`, gateway chat stays on the legacy chat-completions transport and approval-capable commands can remain pending in the agent without a WebUI approval card.
 
+**Conversations created by other clients:**
+
+The Gateway REST API refuses Desktop, CLI/TUI and messaging conversations with
+`permission_denied`; reading or importing them does not authorize a REST turn.
+By default, Gateway mode shows an explanation and a read-only composer for these
+conversations. HTTP refusals also retain bounded, credential-redacted details,
+including structured error codes, in the browser and saved error message.
+
+For a **local Gateway**, opt in to its existing authenticated session protocol
+in each participating profile's `config.yaml`:
+
+```yaml
+webui_chat_backend: gateway
+webui_gateway_session_transport: local
+```
+
+WebUI must run as an authorized local native client with access to that profile's
+Agent home and private bootstrap endpoint (Unix socket or Windows named pipe).
+The installed Agent must provide canonical sessions, native bootstrap tickets,
+and durable `prompt.submit` / `prompt.receipt`; this integration was tested with
+Agent commit `a480a27e76dcad8da7665408e54c6ec270c10f14`. A REST API key or a shared
+source/state volume alone is insufficient. Separate containers and remote-only
+REST deployments need an accessible, supported native connection before enabling
+this setting. WebUI discovers an already running Gateway; it does not start one.
+
+For eligible Desktop, CLI/TUI and messaging sessions, text follow-ups then resume
+the **same session ID** through native authorization. The Gateway owns admission,
+model/tool configuration, execution and history. WebUI translates its events and
+controls into the existing browser stream and approval/clarification cards. Stop
+targets only the WebUI admission or its execution generation. The existing WebUI
+session-YOLO switch answers individual approvals while enabled; it does not change
+the Gateway's own persisted YOLO setting.
+
+The pending WebUI sidecar stores the exact submission and stable input ID before
+sending. After a connection loss or WebUI restart, retrying that ID recovers the
+original admission and durable result. Reopening a disconnected conversation
+recovers it; do not resend a message whose outcome is unknown. Transcript rows
+come from the Gateway display projection, including their native row identities.
+Authorization refusals never fall back to REST or an in-process agent, change a
+source label, or create a fork. A moved/compressed session must be opened at its
+continuation before submitting.
+
+This opt-in currently supports text continuation, ordinary tool approvals,
+clarification questions, Stop and Steer. Attachments and regeneration are refused;
+model/tool/workspace settings and Desktop-specific bridges remain owned by the
+original Gateway session. The in-process backend and API-owned conversations keep
+their existing paths. Remove the setting to restore the external-session
+read-only composer; let any pending Gateway turn settle first.
+
 On the runs API path the turn is executed by the Gateway, so restarting WebUI does not stop it. WebUI stores the Gateway `run_id` on the pending turn (and submits it with an `Idempotency-Key` so the Gateway keeps a durable run record). On startup, WebUI reattaches to every such run by polling `GET /v1/runs/{run_id}` until it settles, then writes the real final answer into the session instead of a "Response interrupted" marker. Stop still cancels a reattached run, and a pending approval is shown again. Token-by-token output from before the restart is not replayed; the reattached turn shows only the final answer. If the Gateway no longer knows the run (for example, it restarted too and the run was interrupted), the turn ends with an error message instead. The legacy chat-completions transport cannot reattach: its turn ends when the WebUI process that holds the HTTP stream exits.
 
 On the runs API path WebUI sends the session's earlier user and assistant turns to the Gateway as the run's `conversation_history`. Some transcript rows are shown in the conversation but not sent; they are the kinds of row the in-process backend also leaves out: error messages (a provider error, or the "Task cancelled." marker); a turn that left no visible text, such as one stopped while the model was still reasoning or calling a tool, or a reply that carried only reasoning; and a prompt that WebUI restored into the transcript after its turn was interrupted, unless the next row sent is its answer and it follows an assistant turn or opens the history, where it is the question that answer replies to. Where a stopped turn left a partial answer in the transcript, that text is sent, so the model can continue from it. An interrupted turn is reconciled into the model-facing context at the moment of cancellation — the prompt and the partial text the browser saw — whether the cancel came from WebUI's Stop or the Gateway itself, and the next turn's `conversation_history` carries that snapshot. When a stopped turn is regenerated instead, the retained prompt is sent once (as the new run's `input`, not duplicated in the history) and the writeback saves a single user row for it.
