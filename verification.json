@@ -1,0 +1,57 @@
+{
+  "passed": true,
+  "profiles": [
+    {
+      "profile": "default",
+      "desktop": true,
+      "telegram": true,
+      "cold_reload": true,
+      "restart_recovery": true,
+      "one_durable_admission": true,
+      "source_labels_preserved": true,
+      "cross_profile_refused": true,
+      "api_owned_202_completed": true
+    },
+    {
+      "profile": "named-profile-1",
+      "desktop": true,
+      "telegram": true,
+      "cold_reload": true,
+      "restart_recovery": true,
+      "one_durable_admission": true,
+      "source_labels_preserved": true,
+      "cross_profile_refused": true,
+      "api_owned_202_completed": true
+    },
+    {
+      "profile": "named-profile-2",
+      "desktop": true,
+      "telegram": true,
+      "cold_reload": true,
+      "restart_recovery": true,
+      "one_durable_admission": true,
+      "source_labels_preserved": true,
+      "cross_profile_refused": true,
+      "api_owned_202_completed": true
+    },
+    {
+      "profile": "named-profile-3",
+      "desktop": true,
+      "telegram": true,
+      "cold_reload": true,
+      "restart_recovery": true,
+      "one_durable_admission": true,
+      "source_labels_preserved": true,
+      "cross_profile_refused": true,
+      "api_owned_202_completed": true
+    }
+  ],
+  "environment": "isolated Linux containers; real Gateway, WebUI, native authentication, Chromium and SQLite; deterministic model HTTP fixture; synthetic messaging routes and sender; no live credentials or provider validation",
+  "gateway_image": "sha256:b7837e696eebce08495f6984a79a0a6a7ef696af746d407debff26d88473a389",
+  "webui_base": "c11ea034117f6f82441800870fa594ed8acf0e92",
+  "focused_pytest": {
+    "passed": 425,
+    "skipped": 2,
+    "linux_checks": "peer credentials, allowlist, profile isolation, malformed handshake, symlink, directory modes, foreign UID and graceful socket cleanup passed in Linux lab"
+  }
+}
