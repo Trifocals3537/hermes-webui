@@ -913,6 +913,13 @@ def _retag_empty_session_profile(session, requested_profile):
             row_profile in root_profile_names and requested_owner in root_profile_names
         ):
             return session_profile, "same_owner"
+        # External history can live entirely in Agent state.db. An empty
+        # sidecar is not a WebUI placeholder and cannot confer a new owner.
+        from api.gateway_sessions import external_session
+        if (getattr(session, "read_only", False)
+                or getattr(session, "is_cli_session", False)
+                or external_session(vars(session))):
+            return session_profile, "external"
         has_persisted_turns = bool(
             getattr(session, "messages", None)
             or getattr(session, "context_messages", None)
@@ -28964,6 +28971,8 @@ def _handle_goal_command(handler, body):
         session_profile, retag_result = _retag_empty_session_profile(
             s, requested_profile
         )
+        if retag_result == "external":
+            return bad(handler, "External session belongs to a different profile", 403)
         if retag_result == "pinned_empty":
             return _session_profile_mismatch_response(
                 handler, body.get("session_id", ""), session_profile
@@ -29407,6 +29416,9 @@ def _handle_chat_start(handler, body, diag=None):
                 requested_profile = ""
         session_profile = getattr(s, "profile", None)
         if not _session_visible_to_active_profile(session_profile, handler):
+            from api.gateway_sessions import external_session
+            if external_session(vars(s)):
+                return bad(handler, "External session belongs to a different profile", 403)
             if (
                 requested_profile
                 and _profiles_match(requested_profile, active_profile)

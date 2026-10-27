@@ -359,8 +359,14 @@ their existing paths. Remove the setting to restore the external-session
 read-only composer; let any pending Gateway turn settle first.
 Native-session model/provider changes are also refused at the model-picker save
 endpoint, before altering the WebUI sidecar. An unchanged selection is allowed.
-An expired Gateway clarification acknowledgement is not reported as accepted;
-withdrawal events retire only the corresponding clarification cards.
+External conversations retain their owning profile even when their WebUI sidecar
+has no messages; a cross-profile chat request returns 403 before placeholder
+retagging. Only empty, unpinned WebUI placeholders can change owner this way.
+Gateway clarification answers are accepted only after an `ok` or `resolved`
+acknowledgement. Expired, already-resolved, missing or unknown acknowledgements
+return 409 without settling the local mirror. A successful acknowledgement still
+succeeds if a settlement event already removed that mirror. Withdrawal events
+retire only the corresponding clarification cards.
 
 On the runs API path the turn is executed by the Gateway, so restarting WebUI does not stop it. WebUI stores the Gateway `run_id` on the pending turn (and submits it with an `Idempotency-Key` so the Gateway keeps a durable run record). On startup, WebUI reattaches to every such run by polling `GET /v1/runs/{run_id}` until it settles, then writes the real final answer into the session instead of a "Response interrupted" marker. Stop still cancels a reattached run, and a pending approval is shown again. Token-by-token output from before the restart is not replayed; the reattached turn shows only the final answer. If the Gateway no longer knows the run (for example, it restarted too and the run was interrupted), the turn ends with an error message instead. The legacy chat-completions transport cannot reattach: its turn ends when the WebUI process that holds the HTTP stream exits.
 

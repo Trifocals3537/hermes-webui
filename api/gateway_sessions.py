@@ -135,7 +135,7 @@ def respond_clarify(session_id, clarify_id, answer):
         result = control(owner.run_id, "clarify", clarify_id=clarify_id, answer=answer)
     except ValueError:
         return False
-    if isinstance(result, dict) and result.get("status") == "expired":
+    if not isinstance(result, dict) or result.get("status") not in ("ok", "resolved"):
         return False
     from api.clarify import resolve_clarify_by_id
     # Gateway owns the acknowledgement. Its settlement event can retire this
