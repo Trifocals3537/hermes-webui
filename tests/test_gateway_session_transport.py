@@ -339,3 +339,73 @@ def test_approval_reuses_existing_yolo_handoff_and_mirror(monkeypatch):
     assert not events  # auto-settled prompt must not show an actionable card
     assert calls[0][1]["run_id"] == instance.run_id
     assert calls[0][1]["approval_id"] == "prompt-1"
+
+
+@pytest.mark.parametrize("profile", ["default", "josue", "tomo", "tristan"])
+@pytest.mark.parametrize("outcome", ["accepted", "stale", "disconnected", "not_pending"])
+@pytest.mark.parametrize("choice", ["once", "deny"])
+def test_native_approval_http_response_keeps_transport_owner(
+    monkeypatch, tmp_path, profile, outcome, choice,
+):
+    """REST generation support must not redirect native controls to Runs API."""
+    from unittest.mock import MagicMock
+
+    from api import gateway_chat, route_approvals, routes, runner_client
+
+    sid = f"native-approval-{profile}"
+    instance = sessions.SessionRelay(
+        sid, f"request-{profile}", str(tmp_path / profile),
+        {"session_id": sid}, lambda *args: None, threading.Event(), lambda *args: None,
+    )
+    client = Client()
+    client.status = "started"
+    instance.client = client
+    instance.receipt = {"admission_id": f"admission-{profile}"}
+    monkeypatch.setattr(gateway_chat, "_gateway_session_yolo_enabled", lambda _: False)
+    rest = MagicMock(side_effect=AssertionError("native control must not use REST"))
+    monkeypatch.setattr(runner_client, "HttpRunnerClient", rest)
+    refresh = MagicMock(side_effect=AssertionError("native control must not refresh a REST run"))
+    monkeypatch.setattr(routes, "_gateway_run_prompt", refresh)
+    control_calls = []
+
+    def control(run_id, action, **params):
+        control_calls.append((run_id, action, params))
+        assert run_id == instance.run_id
+        assert instance.home == str(tmp_path / profile)
+        if outcome == "not_pending":
+            raise runner_client.RunnerClientError("No longer pending", code="approval_not_pending")
+        return asyncio.run(instance.control(action, **params))
+
+    monkeypatch.setattr(sessions, "control", control)
+    replies = []
+    monkeypatch.setattr(routes, "j", lambda h, data, status=200, **kw: replies.append((status, data)))
+    try:
+        instance.approval({"prompt_id": "prompt-1", "command": "example", "choices": ["once", "deny"]}, 3)
+        mirror = route_approvals.gateway_pending_mirror(sid, run_id=instance.run_id)
+        assert mirror is not None
+        if outcome == "stale":
+            client.generation = 4
+        elif outcome == "disconnected":
+            instance.client = None
+        routes._handle_approval_respond(MagicMock(), {
+            "session_id": sid, "run_id": instance.run_id, "approval_id": "prompt-1",
+            "mirror_token": mirror[route_approvals._GATEWAY_MIRROR_TOKEN], "choice": choice,
+        })
+        assert control_calls == [(instance.run_id, "approval", {"approval_id": "prompt-1", "choice": choice})]
+        rest.assert_not_called()
+        refresh.assert_not_called()
+        answers = [params for method, params in client.calls if method == "approval.respond"]
+        pending = route_approvals.gateway_pending_mirror(sid, run_id=instance.run_id)
+        if outcome == "accepted":
+            assert replies[0][0] == 200 and replies[0][1]["ok"] is True
+            assert answers == [{"session_id": sid, "execution_generation": 3,
+                                "prompt_id": "prompt-1", "choice": choice}]
+            assert pending is None
+        else:
+            assert replies[0][0] == 502 and replies[0][1]["ok"] is False
+            assert not answers
+            assert pending is not None
+    finally:
+        with route_approvals._lock:
+            route_approvals._pending.pop(sid, None)
+            route_approvals._gateway_queues.pop(sid, None)
