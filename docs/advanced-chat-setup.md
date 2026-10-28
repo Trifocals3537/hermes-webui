@@ -306,6 +306,15 @@ By default, Gateway mode shows an explanation and a read-only composer for these
 conversations. HTTP refusals also retain bounded, credential-redacted details,
 including structured error codes, in the browser and saved error message.
 
+This also covers the default chat-completions mode, with the Runs API off.
+In an isolated check of upstream WebUI `516321171c74`, CLI, TUI and Desktop
+follow-ups first returned HTTP 200, then failed with `permission_denied`.
+None of those turns reached the original Agent conversation history. This PR
+explains the restriction before sending instead. New WebUI conversations
+continued normally on both versions. The check covered four profiles with a
+real Gateway and saved database history, using made-up conversations and model
+replies; it does not establish behavior for every older Gateway version.
+
 For a **local Gateway**, opt in to its existing authenticated session protocol
 in each participating profile's `config.yaml`:
 

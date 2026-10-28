@@ -145,13 +145,14 @@ def test_same_owner_external_session_is_not_retagged(native_home, profile):
     assert session.profile == profile
 
 
-@pytest.mark.parametrize("source", ["telegram", "desktop"])
-def test_goal_cannot_retag_external_placeholder(native_home, monkeypatch, source):
-    session = models.Session(session_id="goal-external", profile="default", source_tag=source)
+@pytest.mark.parametrize("source,read_only", [("telegram", False), ("desktop", False), ("webui", True)])
+def test_goal_cannot_retag_external_placeholder(native_home, monkeypatch, source, read_only):
+    session = models.Session(session_id="goal-external", profile="default", source_tag=source,
+                             read_only=read_only)
     monkeypatch.setattr(routes, "get_session", lambda sid: session)
     monkeypatch.setattr(routes, "_session_is_subagent_view_only", lambda sid: False)
     replies = []
     monkeypatch.setattr(routes, "bad", lambda h, text, status=400: replies.append((status, text)) or True)
     routes._handle_goal_command(object(), {"session_id": session.session_id, "profile": "josue", "args": "status"})
-    assert replies[-1][0] == 403
+    assert replies[-1] == (403, "Session belongs to a different profile")
     assert session.profile == "default"

@@ -34,8 +34,13 @@ REFUSAL = b'{"error":{"message":"permission_denied","type":"invalid_request_erro
     "session_source": "messaging", "source_tag": "telegram", "read_only": False,
 }, {"session_source": "cli", "source_tag": "tui", "is_cli_session": True},
     {"is_cli_session": True}])
-def test_gateway_projection_marks_external_chat_unavailable_without_persisting_read_only(monkeypatch, source):
+@pytest.mark.parametrize("runs_setting", [None, "false", "true"])
+def test_gateway_projection_marks_external_chat_unavailable_without_persisting_read_only(monkeypatch, source, runs_setting):
     monkeypatch.setenv("HERMES_WEBUI_CHAT_BACKEND", "gateway")
+    if runs_setting is None:
+        monkeypatch.delenv("HERMES_WEBUI_GATEWAY_USE_RUNS_API", raising=False)
+    else:
+        monkeypatch.setenv("HERMES_WEBUI_GATEWAY_USE_RUNS_API", runs_setting)
     projected = helpers.public_session_projection(source)
     assert "another Hermes client" in projected["chat_read_only_reason"]
     assert not source.get("chat_read_only_reason")

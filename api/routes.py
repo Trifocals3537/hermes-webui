@@ -29171,7 +29171,7 @@ def _handle_goal_command(handler, body):
             s, requested_profile
         )
         if retag_result == "external":
-            return bad(handler, "External session belongs to a different profile", 403)
+            return bad(handler, "Session belongs to a different profile", 403)
         if retag_result == "pinned_empty":
             return _session_profile_mismatch_response(
                 handler, body.get("session_id", ""), session_profile
