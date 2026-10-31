@@ -1807,6 +1807,7 @@ def public_session_projection(session_dict: dict) -> dict:
     from api.gateway_chat import gateway_session_chat_read_only_reason
 
     result.pop("chat_read_only_reason", None)
+    result.pop("chat_read_only_can_connect", None)
     result.pop("chat_via_gateway_session", None)
     from api.gateway_sessions import configured, config_for_session, external_session
     from api.gateway_chat import webui_gateway_chat_enabled
@@ -1816,6 +1817,8 @@ def public_session_projection(session_dict: dict) -> dict:
     reason = gateway_session_chat_read_only_reason(result, config_data=config)
     if reason:
         result["chat_read_only_reason"] = reason
+        if external_session(result):
+            result["chat_read_only_can_connect"] = True
     return result
 
 

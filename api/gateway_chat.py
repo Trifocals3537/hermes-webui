@@ -418,18 +418,23 @@ def gateway_session_chat_read_only_reason(session: dict, config_data=None) -> st
         not source and not session.get("is_cli_session")
     ):
         return ""
-    from api.gateway_sessions import configured, config_for_session
+    from api.gateway_sessions import configured, config_for_session, external_session
     if config_data is None:
         config_data = config_for_session(session)
     if not webui_gateway_chat_enabled(config_data):
         return ""
     if configured(session, config_data):
         return ""
-    return (
-        "This conversation belongs to another Hermes client. Continuing it requires "
-        "WebUI's local Gateway session connection. Continue in the original client "
-        "or configure webui_gateway_session_transport: local."
-    )
+    if not external_session(session):
+        return "Read-only in WebUI."
+    client = {
+        "desktop": "Desktop", "cli": "CLI", "tui": "TUI", "gui": "GUI",
+        "acp": "ACP", "local": "the original client", "telegram": "Telegram",
+        "discord": "Discord", "slack": "Slack", "whatsapp": "WhatsApp",
+        "signal": "Signal", "matrix": "Matrix", "mattermost": "Mattermost",
+        "teams": "Teams", "line": "LINE", "feishu": "Feishu",
+    }.get(source, "the original client")
+    return f"Read-only in WebUI. Continue in {client}."
 
 
 def _gateway_base_url(config_data=None, environ: dict[str, str] | None = None) -> str:

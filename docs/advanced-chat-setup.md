@@ -303,7 +303,11 @@ Use this when the connected gateway advertises approval support and you want too
 The Gateway REST API refuses Desktop, CLI/TUI and messaging conversations with
 `permission_denied`; reading or importing them does not authorize a REST turn.
 By default, Gateway mode shows an explanation and a read-only composer for these
-conversations. HTTP refusals also retain bounded, credential-redacted details,
+conversations. The notice names the original client and links to the connection
+instructions below. The message box says "Read-only in WebUI" and keeps any draft
+when you switch conversations. Unsupported sources, such as scheduled jobs and
+subagents, stay read-only and do not offer a connection that cannot help them.
+HTTP refusals also retain bounded, credential-redacted details,
 including structured error codes, in the browser and saved error message.
 
 This also covers the default chat-completions mode, with the Runs API off.
@@ -314,6 +318,8 @@ explains the restriction before sending instead. New WebUI conversations
 continued normally on both versions. The check covered four profiles with a
 real Gateway and saved database history, using made-up conversations and model
 replies; it does not establish behavior for every older Gateway version.
+
+### Gateway session connection
 
 For a **local Gateway**, opt in to its existing authenticated session protocol
 in each participating profile's `config.yaml`:

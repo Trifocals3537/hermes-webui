@@ -66,16 +66,20 @@ def test_native_worker_uses_explicit_owner_config(owner_profiles, monkeypatch, p
     ({"model": "new"}, False), ({"model_provider": "new"}, False),
     ({"model_provider": None}, False), ({"model": "old", "model_provider": "old-provider"}, True),
 ])
-def test_native_picker_update_cannot_rewrite_authority(owner_profiles, monkeypatch, update, accepted):
+@pytest.mark.parametrize("stale_lookup", [False, True])
+def test_native_picker_update_cannot_rewrite_authority(owner_profiles, monkeypatch, update, accepted, stale_lookup):
     session = models.Session(session_id="native-picker", profile="default", workspace=str(owner_profiles),
                              model="old", model_provider="old-provider", source_tag="desktop", session_source="other")
     session.save = MagicMock()
+    monkeypatch.setattr(routes, "SESSIONS", OrderedDict([(session.session_id, session)]))
     original_workspace = session.workspace
     body = {"session_id": session.session_id, **update}
     monkeypatch.setattr(routes, "_check_csrf", lambda *a: True)
     monkeypatch.setattr(routes, "read_body", lambda *a: body)
     monkeypatch.setattr(routes, "get_session", lambda *a, **k: session)
-    monkeypatch.setattr(routes, "_get_or_materialize_session", lambda *a: session)
+    outside = models.Session(session_id=session.session_id, profile="default",
+                             workspace=original_workspace, model="old", model_provider="old-provider") if stale_lookup else session
+    monkeypatch.setattr(routes, "_get_or_materialize_session", lambda *a: outside)
     monkeypatch.setattr(routes, "resolve_trusted_workspace", lambda *a, **k: original_workspace)
     monkeypatch.setattr(routes, "set_last_workspace", lambda *a, **k: None)
     monkeypatch.setattr(config, "_evict_session_agent", lambda *a: None)

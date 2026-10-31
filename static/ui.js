@@ -11490,6 +11490,15 @@ function getComposerPrimaryAction(){
 function _applyBusyComposerPlaceholder(){
   const input=$('msg');
   if(!input) return;
+  if(S.session&&S.session.chat_read_only_reason){
+    input.placeholder=typeof t==='function' ? t('composer_placeholder_read_only') : 'Read-only in WebUI';
+    input.dataset.readOnlyPlaceholder='true';
+    return;
+  }
+  if(input.dataset.readOnlyPlaceholder){
+    input.placeholder='Message '+assistantDisplayName()+'\u2026';
+    delete input.dataset.readOnlyPlaceholder;
+  }
   if(_compressionPlaceholderSaved!==null) return;
   if(input.disabled) return;
   if(_composerHasContent()) return;
@@ -11531,9 +11540,14 @@ function _setComposerPrimaryButtonIcon(btn,action){
 
 function updateSendBtn(){
   const chatReadOnlyReason=(S.session&&S.session.chat_read_only_reason)||'';
-  const chatReadOnlyNotice=$('composerChatReadOnlyReason');
+  const chatReadOnlyNotice=$('composerChatReadOnlyNotice');
+  const chatReadOnlyText=$('composerChatReadOnlyReason');
+  const chatReadOnlyHelp=$('composerChatReadOnlyHelp');
+  if(chatReadOnlyText&&chatReadOnlyText.textContent!==chatReadOnlyReason){
+    chatReadOnlyText.textContent=chatReadOnlyReason;
+  }
+  if(chatReadOnlyHelp) chatReadOnlyHelp.hidden=!(chatReadOnlyReason&&S.session.chat_read_only_can_connect);
   if(chatReadOnlyNotice){
-    chatReadOnlyNotice.textContent=chatReadOnlyReason;
     chatReadOnlyNotice.hidden=!chatReadOnlyReason;
   }
   const chatInput=$('msg');

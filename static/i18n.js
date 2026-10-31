@@ -5,6 +5,8 @@
 
 const LOCALES = {
   en: {
+    composer_placeholder_read_only: 'Read-only in WebUI',
+    composer_read_only_connection: 'Enable Gateway connection',
     offline_title: 'Connection lost',
     offline_browser_detail: 'Your browser reports that this device is offline.',
     offline_network_detail: 'Hermes is unreachable from this browser right now.',

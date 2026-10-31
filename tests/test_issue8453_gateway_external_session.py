@@ -42,7 +42,7 @@ def test_gateway_projection_marks_external_chat_unavailable_without_persisting_r
     else:
         monkeypatch.setenv("HERMES_WEBUI_GATEWAY_USE_RUNS_API", runs_setting)
     projected = helpers.public_session_projection(source)
-    assert "another Hermes client" in projected["chat_read_only_reason"]
+    assert projected["chat_read_only_reason"].startswith("Read-only in WebUI.")
     assert not source.get("chat_read_only_reason")
     assert projected.get("read_only") == source.get("read_only")
 
@@ -180,16 +180,20 @@ def test_external_composer_disables_send_preserves_draft_and_resets_on_navigatio
         return source[start:start + 1 + end.start()] if end else source[start:]
 
     functions = "\n".join(function(ui, name) for name in (
-        "getComposerPrimaryAction", "updateSendBtn",
+        "getComposerPrimaryAction", "updateSendBtn", "_applyBusyComposerPlaceholder",
     )) + "\n" + function(messages, "send")
     script = r"""
 const assert=require('node:assert/strict');
-const S={session:{chat_read_only_reason:'Continue in the original client.'},busy:false,activeStreamId:null,pendingFiles:[]};
+const S={session:{chat_read_only_reason:'Read-only in WebUI. Continue in Desktop.',chat_read_only_can_connect:true},busy:false,activeStreamId:null,pendingFiles:[]};
 const attrs={'aria-describedby':'composerWorkspaceContext'};
-const msg={value:'keep this draft',disabled:false,readOnly:false,getAttribute:k=>attrs[k],setAttribute:(k,v)=>attrs[k]=v,removeAttribute:k=>delete attrs[k]};
+const msg={value:'keep this draft',dataset:{},disabled:false,readOnly:false,getAttribute:k=>attrs[k],setAttribute:(k,v)=>attrs[k]=v,removeAttribute:k=>delete attrs[k]};
 const btn={dataset:{},style:{},classList:{toggle(){},remove(){},contains(){return true}},setAttribute(){}};
-const notice={hidden:true,textContent:''};
-const elements={msg,btnSend:btn,composerChatReadOnlyReason:notice};
+const notice={hidden:true};
+const reason={textContent:''};
+const help={hidden:true};
+let _compressionPlaceholderSaved=null;
+const assistantDisplayName=()=> 'Hermes';
+const elements={msg,btnSend:btn,composerChatReadOnlyNotice:notice,composerChatReadOnlyReason:reason,composerChatReadOnlyHelp:help};
 const $=id=>elements[id];
 const _composerHasContent=()=>!!msg.value;
 const _getExplicitBusyCommandAction=()=>null;
@@ -203,15 +207,22 @@ const requestAnimationFrame=fn=>fn();
  assert.equal(msg.readOnly,true);
  assert.equal(btn.disabled,true);
  assert.equal(notice.hidden,false);
- assert.equal(notice.textContent,S.session.chat_read_only_reason);
+ assert.equal(reason.textContent,S.session.chat_read_only_reason);
+ assert.equal(msg.placeholder,"Read-only in WebUI");
+ assert.equal(help.hidden,false);
  assert.match(attrs['aria-describedby'],/composerWorkspaceContext composerChatReadOnlyReason/);
  await send();
  assert.equal(msg.value,'keep this draft');
  S.busy=true;S.activeStreamId='owned-stream';
  assert.equal(getComposerPrimaryAction(),'stop');
- S.busy=false;S.activeStreamId=null;S.session={session_source:'webui'};
+ S.busy=false;S.activeStreamId=null;S.session={chat_read_only_reason:'Read-only in WebUI.'};
+ updateSendBtn();
+ assert.equal(help.hidden,true);
+ S.session={session_source:'webui'};
  updateSendBtn();
  assert.equal(msg.readOnly,false);
+ assert.equal(msg.placeholder,"Message Hermes…");
+ assert.equal(help.hidden,true);
  assert.equal(btn.disabled,false);
  assert.equal(notice.hidden,true);
  assert.equal(attrs['aria-describedby'],'composerWorkspaceContext');
@@ -222,3 +233,48 @@ const requestAnimationFrame=fn=>fn();
     result = subprocess.run([node, "-"], input=script, encoding="utf-8", capture_output=True, timeout=15)
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip() == "ok"
+
+
+@pytest.mark.parametrize("profile", ["default", "josue", "tomo", "tristan"])
+@pytest.mark.parametrize("source,label", [
+    ("desktop", "Desktop"), ("cli", "CLI"), ("tui", "TUI"),
+    ("telegram", "Telegram"), ("discord", "Discord"), ("slack", "Slack"),
+    ("whatsapp", "WhatsApp"), ("signal", "Signal"), ("matrix", "Matrix"),
+    ("mattermost", "Mattermost"), ("teams", "Teams"), ("line", "LINE"),
+    ("feishu", "Feishu"), ("acp", "ACP"), ("gui", "GUI"),
+    ("local", "the original client"),
+])
+def test_read_only_notice_names_supported_client(monkeypatch, profile, source, label):
+    monkeypatch.setenv("HERMES_WEBUI_CHAT_BACKEND", "gateway")
+    monkeypatch.setattr("api.gateway_sessions.config_for_session", lambda _: {})
+    data = {"session_source": "other", "source_tag": source, "profile": profile}
+    result = helpers.public_session_projection(data)
+    assert result["chat_read_only_reason"] == f"Read-only in WebUI. Continue in {label}."
+    assert result["chat_read_only_can_connect"] is True
+    assert "chat_read_only_can_connect" not in data
+
+
+@pytest.mark.parametrize("transport", [None, "local", "unix"])
+@pytest.mark.parametrize("source", ["subagent", "cron", "claude_code", "unknown", "<script>"])
+def test_unsupported_source_does_not_offer_connection(monkeypatch, source, transport):
+    monkeypatch.setenv("HERMES_WEBUI_CHAT_BACKEND", "gateway")
+    monkeypatch.setattr("api.gateway_sessions.config_for_session",
+                        lambda _: {"webui_gateway_session_transport": transport})
+    result = helpers.public_session_projection({
+        "source_tag": source, "chat_read_only_can_connect": True,
+    })
+    assert result["chat_read_only_reason"] == "Read-only in WebUI."
+    assert not result.get("chat_read_only_can_connect")
+
+
+@pytest.mark.parametrize("transport", ["local", "unix"])
+def test_available_connection_clears_read_only_advice(monkeypatch, transport):
+    monkeypatch.setenv("HERMES_WEBUI_CHAT_BACKEND", "gateway")
+    monkeypatch.setattr("api.gateway_sessions.config_for_session",
+                        lambda _: {"webui_gateway_session_transport": transport})
+    result = helpers.public_session_projection({
+        **DESKTOP, "chat_read_only_reason": "old", "chat_read_only_can_connect": True,
+    })
+    assert result["chat_via_gateway_session"] is True
+    assert "chat_read_only_reason" not in result
+    assert "chat_read_only_can_connect" not in result
