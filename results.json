@@ -1,0 +1,128 @@
+[
+  {
+    "label": "before",
+    "width": 1440,
+    "theme": "light",
+    "noticeHeight": 44,
+    "placeholder": "Message Hermes…",
+    "readOnly": true,
+    "sendDisabled": true,
+    "fits": true
+  },
+  {
+    "label": "before",
+    "width": 1440,
+    "theme": "dark",
+    "noticeHeight": 44,
+    "placeholder": "Message Hermes…",
+    "readOnly": true,
+    "sendDisabled": true,
+    "fits": true
+  },
+  {
+    "label": "before",
+    "width": 900,
+    "theme": "light",
+    "noticeHeight": 44,
+    "placeholder": "Message Hermes…",
+    "readOnly": true,
+    "sendDisabled": true,
+    "fits": true
+  },
+  {
+    "label": "before",
+    "width": 900,
+    "theme": "dark",
+    "noticeHeight": 44,
+    "placeholder": "Message Hermes…",
+    "readOnly": true,
+    "sendDisabled": true,
+    "fits": true
+  },
+  {
+    "label": "before",
+    "width": 390,
+    "theme": "light",
+    "noticeHeight": 80,
+    "placeholder": "Message Hermes…",
+    "readOnly": true,
+    "sendDisabled": true,
+    "fits": true
+  },
+  {
+    "label": "before",
+    "width": 390,
+    "theme": "dark",
+    "noticeHeight": 80,
+    "placeholder": "Message Hermes…",
+    "readOnly": true,
+    "sendDisabled": true,
+    "fits": true
+  },
+  {
+    "label": "after",
+    "width": 1440,
+    "theme": "light",
+    "noticeHeight": 26,
+    "placeholder": "Read-only in WebUI",
+    "readOnly": true,
+    "sendDisabled": true,
+    "fits": true,
+    "help": "https://github.com/nesquena/hermes-webui/blob/master/docs/advanced-chat-setup.md#gateway-session-connection"
+  },
+  {
+    "label": "after",
+    "width": 1440,
+    "theme": "dark",
+    "noticeHeight": 26,
+    "placeholder": "Read-only in WebUI",
+    "readOnly": true,
+    "sendDisabled": true,
+    "fits": true,
+    "help": "https://github.com/nesquena/hermes-webui/blob/master/docs/advanced-chat-setup.md#gateway-session-connection"
+  },
+  {
+    "label": "after",
+    "width": 900,
+    "theme": "light",
+    "noticeHeight": 26,
+    "placeholder": "Read-only in WebUI",
+    "readOnly": true,
+    "sendDisabled": true,
+    "fits": true,
+    "help": "https://github.com/nesquena/hermes-webui/blob/master/docs/advanced-chat-setup.md#gateway-session-connection"
+  },
+  {
+    "label": "after",
+    "width": 900,
+    "theme": "dark",
+    "noticeHeight": 26,
+    "placeholder": "Read-only in WebUI",
+    "readOnly": true,
+    "sendDisabled": true,
+    "fits": true,
+    "help": "https://github.com/nesquena/hermes-webui/blob/master/docs/advanced-chat-setup.md#gateway-session-connection"
+  },
+  {
+    "label": "after",
+    "width": 390,
+    "theme": "light",
+    "noticeHeight": 44,
+    "placeholder": "Read-only in WebUI",
+    "readOnly": true,
+    "sendDisabled": true,
+    "fits": true,
+    "help": "https://github.com/nesquena/hermes-webui/blob/master/docs/advanced-chat-setup.md#gateway-session-connection"
+  },
+  {
+    "label": "after",
+    "width": 390,
+    "theme": "dark",
+    "noticeHeight": 44,
+    "placeholder": "Read-only in WebUI",
+    "readOnly": true,
+    "sendDisabled": true,
+    "fits": true,
+    "help": "https://github.com/nesquena/hermes-webui/blob/master/docs/advanced-chat-setup.md#gateway-session-connection"
+  }
+]
