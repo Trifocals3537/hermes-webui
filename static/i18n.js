@@ -1924,6 +1924,8 @@ const LOCALES = {
   },
 
   it: {
+    composer_placeholder_read_only: 'Sola lettura in WebUI',
+    composer_read_only_connection: 'Abilita la connessione al Gateway',
     offline_title: 'Connessione persa',
     offline_browser_detail: 'Il browser segnala che questo dispositivo è offline.',
     offline_network_detail: 'Hermes non è raggiungibile da questo browser al momento.',
@@ -3824,6 +3826,8 @@ const LOCALES = {
   },
 
   ja: {
+    composer_placeholder_read_only: 'WebUIでは読み取り専用',
+    composer_read_only_connection: 'Gateway接続を有効にする',
     offline_title: '接続が切断されました',
     offline_browser_detail: 'ブラウザはこのデバイスがオフラインだと報告しています。',
     offline_network_detail: '現在、このブラウザからHermesに到達できません。',
@@ -5729,6 +5733,8 @@ const LOCALES = {
   },
 
   ru: {
+    composer_placeholder_read_only: 'Только чтение в WebUI',
+    composer_read_only_connection: 'Включить подключение к Gateway',
     offline_title: 'Соединение потеряно',
     offline_browser_detail: 'Браузер сообщает, что это устройство офлайн.',
     offline_network_detail: 'Hermes сейчас недоступен из этого браузера.',
@@ -7616,6 +7622,8 @@ const LOCALES = {
   },
 
   es: {
+    composer_placeholder_read_only: 'Solo lectura en WebUI',
+    composer_read_only_connection: 'Activar conexión con Gateway',
     offline_title: 'Conexión perdida',
     offline_browser_detail: 'Tu navegador indica que este dispositivo está sin conexión.',
     offline_network_detail: 'Hermes no está disponible desde este navegador ahora mismo.',
@@ -9463,6 +9471,8 @@ const LOCALES = {
   },
 
   de: {
+    composer_placeholder_read_only: 'In WebUI nur lesbar',
+    composer_read_only_connection: 'Gateway-Verbindung aktivieren',
     offline_title: 'Verbindung verloren',
     offline_browser_detail: 'Dein Browser meldet, dass dieses Gerät offline ist.',
     offline_network_detail: 'Hermes ist von diesem Browser aus gerade nicht erreichbar.',
@@ -11362,6 +11372,8 @@ const LOCALES = {
   },
 
   zh: {
+    composer_placeholder_read_only: '在 WebUI 中只读',
+    composer_read_only_connection: '启用 Gateway 连接',
     offline_title: '连接已断开',
     offline_browser_detail: '浏览器报告此设备当前离线。',
     offline_network_detail: '此浏览器当前无法连接到 Hermes。',
@@ -13197,6 +13209,8 @@ const LOCALES = {
 
   // Traditional Chinese (zh-Hant)
   'zh-Hant': {
+    composer_placeholder_read_only: '在 WebUI 中唯讀',
+    composer_read_only_connection: '啟用 Gateway 連線',
 
     offline_title: '連線中斷',
     offline_browser_detail: '瀏覽器回報此裝置目前離線。',
@@ -15100,6 +15114,8 @@ const LOCALES = {
   },
 
   pt: {
+    composer_placeholder_read_only: 'Somente leitura no WebUI',
+    composer_read_only_connection: 'Ativar conexão com o Gateway',
     offline_title: 'Conexão perdida',
     offline_browser_detail: 'O navegador informa que este dispositivo está offline.',
     offline_network_detail: 'O Hermes está inacessível neste navegador agora.',
@@ -16818,6 +16834,8 @@ const LOCALES = {
     pb_update_failed: 'Não foi possível salvar as configurações do projeto: ',
   },
   ko: {
+    composer_placeholder_read_only: 'WebUI에서 읽기 전용',
+    composer_read_only_connection: 'Gateway 연결 활성화',
     offline_title: '연결이 끊겼습니다',
     offline_browser_detail: '브라우저가 이 장치가 오프라인이라고 보고합니다.',
     offline_network_detail: '현재 이 브라우저에서 Hermes에 연결할 수 없습니다.',
@@ -18708,6 +18726,8 @@ const LOCALES = {
   },
 
   fr: {
+    composer_placeholder_read_only: 'Lecture seule dans WebUI',
+    composer_read_only_connection: 'Activer la connexion au Gateway',
     offline_title: 'Connexion perdue',
     offline_browser_detail: 'Votre navigateur signale que cet appareil est hors ligne.',
     offline_network_detail: 'Hermes est actuellement inaccessible depuis ce navigateur.',
@@ -20580,6 +20600,8 @@ const LOCALES = {
   },
 
   cs: {
+    composer_placeholder_read_only: 'Ve WebUI pouze ke čtení',
+    composer_read_only_connection: 'Povolit připojení ke Gateway',
     _label: 'Čeština',
     sessions_source_webui: 'Relace WebUI ({0})',
     sessions_source_cli: 'Relace CLI ({0})',
@@ -22439,6 +22461,8 @@ const LOCALES = {
     pb_update_failed: 'Nastavení projektu se nepodařilo uložit: ',
   },
   tr: {
+    composer_placeholder_read_only: 'WebUI’de salt okunur',
+    composer_read_only_connection: 'Gateway bağlantısını etkinleştir',
 
 
 
@@ -24334,6 +24358,8 @@ const LOCALES = {
     pb_update_failed: 'Proje ayarları kaydedilemedi: ',
   },
   pl: {
+    composer_placeholder_read_only: 'Tylko do odczytu w WebUI',
+    composer_read_only_connection: 'Włącz połączenie z Gateway',
     offline_title: 'Połączenie utracone',
     offline_browser_detail: 'Twoja przeglądarka zgłasza, że to urządzenie jest offline.',
     offline_network_detail: 'Hermes jest obecnie nieosiągalny z tej przeglądarki.',
@@ -26229,6 +26255,8 @@ const LOCALES = {
     pb_update_failed: 'Nie udało się zapisać ustawień projektu: ',
   },
   vi: {
+    composer_placeholder_read_only: 'Chỉ đọc trong WebUI',
+    composer_read_only_connection: 'Bật kết nối Gateway',
     offline_title: 'Mất kết nối',
     offline_browser_detail: 'Trình duyệt báo rằng thiết bị này đang ngoại tuyến.',
     offline_network_detail: 'Không thể kết nối tới Hermes từ trình duyệt lúc này.',
